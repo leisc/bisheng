@@ -145,7 +145,10 @@ develop-eggs/
 config.dev.yaml
 src/backend/bisheng/config.yaml
 # Local per-environment configs (contain connection strings / encrypted creds)
+src/backend/.env.host
 src/backend/bisheng/config.*.yaml
+src/backend/celerybeat-schedule.db
+src/backend/*.pkg
 src/backend/data/
 downloads/
 eggs/
