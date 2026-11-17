@@ -195,8 +195,8 @@ logger_conf:
 #        服务账号模块本身始终可用，不受此开关影响。
 # 用 CLI（bisheng login / bisheng deploy）部署托管应用时**必须为 true**——
 # 它签发的密钥需要 app:manage 位。
-# open_platform:
-#   enabled: false
+open_platform:
+  enabled: true
 
 # ── 开放 API 调用链参数（可选，不配则用下面的默认值）───────────────────
 # open_api:
