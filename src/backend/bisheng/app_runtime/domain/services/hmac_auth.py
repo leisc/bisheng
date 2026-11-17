@@ -7,7 +7,10 @@ runtime-manager already use::
 
 Identical on purpose: three processes now speak it (backend↔manager,
 app-proxy↔backend, app-proxy↔manager), and one scheme with one test is far
-safer than three that are "almost" the same.
+safer than three that are "almost" the same. The formula itself lives in
+:mod:`bisheng.common.utils.hmac_signature` — the single source of truth that
+``sso_sync`` already delegates to; this module only adds the FastAPI dependency
+around it.
 
 Two properties carry weight:
 
@@ -24,13 +27,13 @@ Two properties carry weight:
 
 from __future__ import annotations
 
-import hashlib
 import hmac
 
 from fastapi import Request
 from loguru import logger
 
 from bisheng.common.services.config_service import settings
+from bisheng.common.utils.hmac_signature import compute_hmac_signature
 
 SIGNATURE_HEADER = "X-Signature"
 
@@ -50,9 +53,14 @@ class ProxyHmacRejectedError(Exception):
 
 
 def compute_signature(method: str, path: str, raw_body: bytes, secret: str) -> str:
-    """Canonical HMAC-SHA256 hex digest, shared with app-proxy and runtime-manager."""
-    msg = f"{method.upper()}\n{path}\n".encode() + (raw_body or b"")
-    return hmac.new(secret.encode("utf-8"), msg, hashlib.sha256).hexdigest()
+    """Canonical HMAC-SHA256 hex digest, shared with app-proxy and runtime-manager.
+
+    Delegates to :func:`bisheng.common.utils.hmac_signature.compute_hmac_signature`
+    (F120 T002). Kept as a thin alias because call sites and tests import this
+    name; the formula must never be re-implemented here again — a second copy
+    that drifts by one byte silently breaks app-proxy → backend auth.
+    """
+    return compute_hmac_signature(method, path, raw_body, secret)
 
 
 async def verify_proxy_hmac(request: Request) -> None:

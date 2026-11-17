@@ -35,11 +35,25 @@
 
 | 状态 | ID/类型 | 文件与自包含任务 | 依赖/配对 |
 | --- | --- | --- | --- |
-| [ ] | T001 测试/基础设施 | `BT/test_hmac_signature_parity.py`：同一 `METHOD\nPATH\nBODY` 输入下，`common/utils/hmac_signature.py` 与 `app_runtime/domain/services/hmac_auth.py`、`app_runtime/domain/services/orchestrator_client.py` 的现行实现输出字节一致；header 名 `X-Signature` 一致。覆盖 AC: AC-41 | 无；T002 |
-| [ ] | T002 基础设施 | `BE/common/utils/hmac_signature.py`、`BE/app_runtime/domain/services/hmac_auth.py`、`orchestrator_client.py`：把两份重写收敛为调用规范实现；不改签名公式、不改 header、不改错误路径（design 决策 7、坑 #2） | T001 |
-| [ ] | T003 测试/基础设施 | `BT/test_current_subject_context.py`：带合法 token 经 `CustomMiddleware` 后 `current_subject` 可读且与 request 身份一致；无 token/ exempt 路径为 None；上下文在请求结束后 reset。覆盖 AC: AC-03 | 无；T004 |
-| [ ] | T004 基础设施 | `BE/core/context/user.py`（新增 `current_subject` ContextVar + set/reset helper）、`BE/utils/http_middleware.py`：在既有 `decoded_subject` 处 `set()`，`finally` 中 reset；不改变任何既有判定分支（design §5.2、坑 #11） | T003 |
-| [ ] | T005 测试/Domain | `BT/test_sensitive_word_dsh_business_type.py`：枚举新增 `dsh_chat` 后，策略创建/读取/缓存键按 (tenant, business_type, scope) 唯一；既有三种 business_type 行为不变。覆盖 AC: AC-17 | 无；T006 |
+| [x] | T001 测试/基础设施 | `BT/test_hmac_signature_parity.py`：同一 `METHOD\nPATH\nBODY` 输入下，`common/utils/hmac_signature.py` 与 `app_runtime/domain/services/hmac_auth.py`、`app_runtime/domain/services/orchestrator_client.py` 的现行实现输出字节一致；header 名 `X-Signature` 一致。覆盖 AC: AC-41 | 无；T002 |
+
+**T001 实测记录（2026-11-17，13 tests passed）**：三处实现公式确认为同一 `METHOD\\nPATH\\nBODY` → hex(sha256)；`sso_sync/domain/services/hmac_auth.py` 的 `compute_signature` 已是 `compute_hmac_signature` 的薄封装（无需收敛，但已纳入断言）。断言口径见文件内 `test_third_copy_sso_sync_is_a_thin_alias`。
+
+| [x] | T002 基础设施 | `BE/common/utils/hmac_signature.py`、`BE/app_runtime/domain/services/hmac_auth.py`、`orchestrator_client.py`：把两份重写收敛为调用规范实现；不改签名公式、不改 header、不改错误路径（design 决策 7、坑 #2） | T001 |
+
+**T002 实测记录（2026-11-17）**：两处 `compute_signature` 均改为委托 `compute_hmac_signature`（保留函数名与签名，`hmac`/`hashlib` 导入按使用情况清理）；docstring 标注"不得再次就地重写"。验证方式：改动前后对 `test/app_runtime/test_internal_app_proxy_api.py`、`test_preview_entry.py`、`test_orchestrator_client.py`、`test/dsh/test_content_safety_{hmac,runtime}.py` 跑同一选择集，失败集合逐条一致（38 项均为本地缺中间件的既有失败，如 `service_identity_not_configured`），即零新增失败。
+
+| [x] | T003 测试/基础设施 | `BT/test_current_subject_context.py`：带合法 token 经 `CustomMiddleware` 后 `current_subject` 可读且与 request 身份一致；无 token/ exempt 路径为 None；上下文在请求结束后 reset。覆盖 AC: AC-03 | 无；T004 |
+
+**T003 实测记录（2026-11-17，6 tests）**：断言口径 = 与中间件自身 `_decode_jwt_subject(token)` 结果逐字段相等（防止第二次解码漂移）；exempt 路径（`/api/v1/user/login`）必须为 None。
+
+| [x] | T004 基础设施 | `BE/core/context/user.py`（新增 `current_subject` ContextVar + set/reset helper）、`BE/utils/http_middleware.py`：在既有 `decoded_subject` 处 `set()`，`finally` 中 reset；不改变任何既有判定分支（design §5.2、坑 #11） | T003 |
+
+**T004 实测记录（2026-11-17，6 tests passed）**：`current_subject` 默认 None；`set()` 放在 `is_exempt` 计算之后（T003 的 exempt 用例证明放在 `decoded_subject` 处会泄漏登录态），exempt 与 DSH 自有凭据路径显式置 None；`finally` 中 reset。验证方式：`create_app()` 正常构建（middleware 数 6，未新增层）；test/gateway 19 passed；与基线同一选择集失败集合逐条一致。
+| [x] | T005 测试/Domain（含 1 行枚举实现） | `BT/test_sensitive_word_dsh_business_type.py`：枚举新增 `dsh_chat` 后，策略创建/读取/缓存键按 (tenant, business_type, scope) 唯一；既有三种 business_type 行为不变。实现落点 `BE/sensitive_word/domain/schemas.py`：`SensitiveWordBusinessType` 增补 `DSH_CHAT = "dsh_chat"`（承接 F111 引擎，行命名空间独立；`business_type` 是 `String(64)` 普通列、唯一键 `uk_sensitive_policy_scope` 含该列，**无需 DDL**）。测试与实现同任务：改动只有 1 行且测试即其回归网，单独占一个任务号会与既有 T006（`test_gateway_models.py`）撞号。覆盖 AC: AC-17 | 无 |
+
+**T005 实测记录（2026-11-17，先红后绿 11 tests）**：断言口径 = `_scope_stmt` 编译后 SQL 各自含自身 business_type 且四条互不相同；`_build_cache_key` 四类型互异；`aupsert_policy` 对 DSH 不走 workbench 的必填校验且空 auto_reply 回落 `DEFAULT_AUTO_REPLY`，workbench 仍走自身裁剪与校验。先写测试确认 4 处 `AttributeError: DSH_CHAT`（红）后再加枚举。验证方式：test/gateway + test/sensitive_word 共 55 passed；与基线同一选择集失败集合逐条一致。`GET/PUT /api/v1/sensitive-word-policies/{business_type}` 的路径参数由该枚举校验，`dsh_chat` 自动成为合法面（管理面前端注册见 T022/T065）。
+
 
 ## Wave 1：数据、错误码与配置底座（无行为变更）
 

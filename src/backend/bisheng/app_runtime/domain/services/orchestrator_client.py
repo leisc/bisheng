@@ -38,8 +38,6 @@ reach the manager's port.
 
 from __future__ import annotations
 
-import hashlib
-import hmac
 import json
 from typing import Any
 from urllib.parse import quote
@@ -62,6 +60,7 @@ from bisheng.common.errcode.app_factory import (
 )
 from bisheng.common.errcode.app_publish import AppSchemaMigrationFailedError
 from bisheng.common.services.config_service import settings
+from bisheng.common.utils.hmac_signature import compute_hmac_signature
 
 #: Manager ``detail.code`` → platform error class (contract §3). ``unauthorized``
 #: and ``invalid_request`` fold into the orchestrator-unavailable answer on
@@ -111,9 +110,12 @@ _MAX_ATTEMPTS = 2
 
 
 def compute_signature(method: str, path: str, raw_body: bytes, secret: str) -> str:
-    """Canonical HMAC-SHA256 hex digest — byte-identical to the manager's."""
-    msg = f"{method.upper()}\n{path}\n".encode() + (raw_body or b"")
-    return hmac.new(secret.encode("utf-8"), msg, hashlib.sha256).hexdigest()
+    """Canonical HMAC-SHA256 hex digest — byte-identical to the manager's.
+
+    Delegates to :func:`bisheng.common.utils.hmac_signature.compute_hmac_signature`
+    (F120 T002); the signature formula must not be re-implemented here.
+    """
+    return compute_hmac_signature(method, path, raw_body, secret)
 
 
 def build_failure_error(payload: dict[str, Any]) -> AppBuildFailedError:

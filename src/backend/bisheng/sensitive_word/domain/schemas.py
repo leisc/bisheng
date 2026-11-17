@@ -10,6 +10,11 @@ class SensitiveWordBusinessType(str, Enum):
     KNOWLEDGE_SPACE_FILE_PARSE = "knowledge_space_file_parse"
     CHANNEL_ARTICLE = "channel_article"
     WORKBENCH_CHAT = "workbench_chat"
+    #: F120 native gateway — DSH (client-side) chat. Reuses the F111 engine; the
+    #: row namespace is separate from the three above because the unique key is
+    #: (tenant_id, business_type, scope_type, scope_id, logic_delete) — sharing a
+    #: business_type would make one face's policy overwrite another's.
+    DSH_CHAT = "dsh_chat"
 
 
 class SensitiveWordScopeType(str, Enum):

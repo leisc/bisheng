@@ -9,6 +9,7 @@ from fastapi.responses import JSONResponse
 from loguru import logger
 from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoint
 
+from bisheng.core.context import user as subject_ctx
 from bisheng.core.context.tenant import DEFAULT_TENANT_ID, set_current_tenant_id
 from bisheng.core.logger import trace_id_generator, trace_id_var
 from bisheng.utils import get_request_ip
@@ -481,6 +482,14 @@ class CustomMiddleware(BaseHTTPMiddleware):
 
         bypass_token = _bypass_tenant_filter.set(True) if is_exempt else None
 
+        # F120 T004: publish the already-decoded subject for the gateway's ASGI
+        # middleware, which cannot read ``request.user`` (it does not exist yet at
+        # middleware depth) and must not decode the JWT a second time. Exempt
+        # paths keep ``None`` — a login/SSO callback has no identity to publish,
+        # and DSH-owned routes own their own credential. Reset happens in the
+        # outer ``finally``.
+        subject_token = subject_ctx.set_current_subject(None if is_exempt or dsh_owned else decoded_subject)
+
         try:
             if token and not is_exempt:
                 denial = await _apply_token_version_and_visible(
@@ -539,6 +548,7 @@ class CustomMiddleware(BaseHTTPMiddleware):
         finally:
             if bypass_token is not None:
                 _bypass_tenant_filter.reset(bypass_token)
+            subject_ctx.reset_current_subject(subject_token)
             for scope_token in reversed(dsh_scope_tokens):
                 scope_token.var.reset(scope_token)
 
