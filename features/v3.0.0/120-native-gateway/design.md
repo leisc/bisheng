@@ -12,7 +12,7 @@
 
 **关联**: [spec.md](./spec.md)（✅ 已评审 2026-11-10，48 条 AC） · [tasks.md](./tasks.md)（6 Wave / 60 任务，未开工）
 **版本**: v3.0.0
-**最后更新**: 2026-11-10（初版基于对当前工作树的只读调研；同日经 `/sdd-review design` 后按用户裁决修订——RSA 私钥改 Fernet 密文、新表补租户过滤登记、SSO 登录入口纳入 License 授权门；所有行号锚点以当日代码为准）
+**最后更新**: 2026-11-10（初版基于对当前工作树的只读调研；同日经 `/sdd-review design` 后按用户裁决修订——RSA 私钥改 Fernet 密文、新表补租户过滤登记、SSO/OAuth 登录入口纳入 License 授权门；再经 `/sdd-review tasks` 后修订——License 子系统改为只读 `license_info`、不新增写入路径；所有行号锚点以当日代码为准）
 
 ---
 
@@ -111,6 +111,9 @@
 - **选定**：B
 - **与 Java gateway 的刻意偏离**：Java gateway 是 license 过期 `System.exit(0)`（**整个商业面停摆**）。自研网关改为：**商业面请求级拒绝**（错误码 26603），平台核心（开源能力）继续可用。理由：开源部署没有 gateway license，若整体停摆则 OSS 单机版直接被 license 状态绑架；前端 `LicenseBanner` 已承担告知职责（`platform/src/layout/LicenseBanner.tsx`）。
 - **`/api/license/status` 不复刻**：该路径属于外部 ETL 服务，毕昇只做缓存投影（`commercial_license/api/router.py:19-31`）。前端 `getLicenseStatus` 的 "404 即预期" 逻辑保留（`platform/src/controllers/API/license.ts:9-12`）。
+- **F120 对授权数据只读、不新增任何写入路径**（2026-11-10 用户裁决）：`license_info` 表的 Owner 是 `commercial_license` Feature，`features/v3.0.0/release-contract.md` 第 49 行规定「非 Owner Feature 的 AC 中不得出现其他对象的创建/修改/删除行为，只能读取或调用 Owner 的 Service」。因此自研网关**不写** `license_info`：既不改 `etl_sync.py`（该函数 `etl_sync.py:42` 无 source 参数，license_code 硬编码 `"etl"`，并不存在 `source='gateway'` 这条路径），也不新增 ETL/上报入口；授权状态完全以 Owner 的既有写入（ETL beat 刷新 `etl` 行 + `POST /api/v1/commercial-licenses/gateway` 注入 `gateway` 行，`commercial_license/api/router.py:32-56`，映射函数 `mappers.py:80` 固定产出 `license_code="gateway"`）为准。F120 只经 `LicenseInfoRepository.get_all()` 与 `compute_display_state` / `compute_days_remaining`（`mappers.py`）**只读**裁决。
+- **授权码范围可配**：`GatewaySettings.license_codes` 默认 `[etl, gateway]`——自研部署只有一份商业授权（ETL 行），双跑期 Java gateway 另注入 `gateway` 行，两者任一有效即放行商业面。
+- **续期延迟是已知取舍**：门按 `expire_date` 裁决、不在请求路径触发 ETL 刷新（避免中间件热路径发起外部 HTTP）；`list_license_status`（`aggregator.py:27`）已在 `/status` 读取路径上对超过 1 小时的陈旧行触发 ETL 刷新，续期后最长在该窗口内被门看到。
 - **何时该重新考虑**：法务 / 商务要求"过期即整体停摆"（届时把 26603 的拒绝范围从商业面扩到全站，一个配置项的事）。
 
 ### 决策 7：与 Java gateway 双跑灰度——路径归属配置化 + target 切换，不做数据同步
@@ -155,7 +158,7 @@
 | **内容安全**（请求 + 响应 + SSE） | 执行层齐全：`ac_automaton.py`、`sensitive_word_policy_service.py`、`stream_scanner.py`；workstation 聊天已接入（`chat_service.py:1739/2667/1849-2531`）、linsight（`linsight.py:189`）、频道文章（`channel_service.py:355-380`）、知识库文件（`knowledge_file_pipeline.py:110-115`）、开放 API 任务模式（`task_mode_service.py:272`，**抛 `OpenApiContentBlockedError`**）；Pro 门控 `sensitive_word_policy_service.py:350-358` | DSH 聊天面（`/api/v1/dsh/chat/completions`）**未接入**；开放 API 模型协议面（`open_api/api/endpoints/model_gateway.py:48` `/chat/completions`）**未接入**；管理面端点 `/api/sensitive/dsh/*` 不存在于后端；旧资源级 `/api/sensitive/saveWords|wordsDetail` 不存在；拦截记录无网关级表 |
 | **限流 QPS** | DSH 授权有 Redis `rate()`（`dsh/domain/services/authorization.py:23`）；`quota_redis` 是月度 token 口径（`dsh/infrastructure/quota_redis.py:124` admit）；部门并发阈值只存不用（`department_limit.py`） | 通用 QPS 令牌桶、规则表、按面拒绝语义 |
 | **WS 在线计数** | 无（`department_limit.py:1-4` 明说 per-resource 返回空页） | 计数器 + session 映射 + 阈值裁决 |
-| **License** | `commercial_license`：`license_info` 表、ETL 同步、beat 任务、`/api/v1/commercial-licenses/status|gateway`（`commercial_license/api/router.py:19,32`）、前端横幅 | 请求级 fail-closed 准入中间件 |
+| **License** | `commercial_license`：`license_info` 表、ETL 同步、beat 任务、`/api/v1/commercial-licenses/status|gateway`（`commercial_license/api/router.py:19,32`）、前端横幅 | 请求级 fail-closed 准入中间件（**只读** `license_info`，不新增写入路径，决策 6） |
 | 拦截记录（`gt_block_record`） | DSH 审计事件 `dsh_content_safety_event`（HMAC 推送摄入，`dsh/content_safety_runtime.py:21`）；聊天被拒写消息行（`chat_service.py:1693`） | 网关级拦截记录表 + 查询面 |
 | 用户组 / 资源组管理（`/api/group/*`） | `user_group` 模块存在（`/api/v1/user-group`，F003，`api/router.py:117` 挂载） | `/api/group/*`、`/api/resource/groupFlows` 兼容面 + 组级限流阈值存储 |
 | 前端仍在调的网关自有路径 | `platform/src/controllers/API/pro.ts`：`/api/sensitive/saveWords|wordsDetail`、`/api/resource/groupFlows`、`/api/group/save|list`、`/api/oauth2/list`、`/api/getkey`、`/api/oauth2/ldap`；`dshContentSafety.ts`：`/api/sensitive/dsh/*`；`license.ts`：`/api/license/status` | 全部需要后端承接（兼容路由）或前端改靶 |
@@ -293,7 +296,7 @@ face ∈ 商业面集合（SSO 登录入口 `/api/v1/gateway/oauth2/**`、DSH �
 其余面 → 放行（OSS 核心可用，决策 6）
 ```
 **`/api/v1/dsh/**` 明确排除在商业面集合之外**（2026-11-10 用户裁决）：F111 已确认 spec AC-03 规定 DSH 的模型鉴权 / 权限 / 额度 / 计量不得恢复 License 或席位准入，且 INV-37 要求开源完整功能不以许可证为前提。DSH 本地面能力在任何授权状态下行为一致。**授权状态查询 `/api/v1/gateway/license/*` 同样排除**：授权过期时前端 License 横幅仍须展示真实状态（AC-35），查询端点不能被自己的门关掉。SSO 登录入口纳入授权门为 2026-11-10 用户裁决，已同步修订 spec AC-02/33/34/47（取代 spec 初版「仅两个管理面」的口径）。
-商业面集合来自 `GatewaySettings.license_faces` 配置（可灰度收紧）。license 数据写入：自研网关自己同步 ETL（复用 `etl_sync.sync_etl_license`，`source='gateway'` 行），**不经前端上报**；`POST /api/v1/commercial-licenses/gateway` 保留给双跑期的 Java gateway 注入（`commercial_license/api/router.py:32`，前端 `reportGatewayLicense` 无感）。
+商业面集合来自 `GatewaySettings.license_faces` 配置（可灰度收紧）。**授权数据只读，F120 不新增写入路径**（2026-11-10 用户裁决，决策 6）：门从 `LicenseInfoRepository` 读 `license_info` 快照（进程内缓存 60s），用 Owner 的 `compute_display_state` / `compute_days_remaining` 重算有效期（`aggregator.py:44-45` 同样是每次读取重算，故不依赖缓存行的 `display_state`），任一 `license_codes` 内的行未过期即放行；`etl_sync.py` 与 `POST /api/v1/commercial-licenses/gateway` 保持原样（后者供双跑期 Java gateway 注入，前端 `reportGatewayLicense` 无感）。**e2e / 本地验证必须先写一条有效 `license_info` 行**（经 Owner 的 `upsert_mapped` 或直接 fixture），否则 SSO 登录入口会被自己的门关掉——`BISHENG_PRO=true` 明确不作为授权依据。
 
 ### 5.7 数据模型（新表，全部 dialect_helpers + 租户列；`gateway_block_record` 为追加型表，不设 logic_delete / update_time）
 
@@ -368,6 +371,7 @@ gateway_block_record(
 gateway:
   enabled: false               # 总开关；false 时中间件与路由均不注册
   license_gate: true           # 商业面 fail-closed（K4）
+  license_codes: [etl, gateway] # 任一有效即放行商业面（只读 license_info，F120 不写表，决策 6）
   license_faces:               # 受 license 门约束的前缀（不含 /api/v1/dsh/** 与授权状态查询，见决策 6）
     - /api/v1/gateway/oauth2/       # SSO/OAuth 登录入口（2026-11-10 用户裁决纳入）
     - /api/v1/gateway/sensitive/     # DSH 敏感词策略管理
@@ -396,7 +400,7 @@ gateway:
 |---|---|---|
 | `platform/src/controllers/API/pro.ts:113-127` | `getSSOurlApi/getKeyApi/ldapLoginApi` 与 `/api/group/*`、`/api/sensitive/*` 改指后端 `/api/v1/gateway/*`（同源，去掉跨进程 target） | 走 controllers 层，禁 store 直连 HTTP（C7） |
 | `platform/src/pages/LoginPage/loginBridge.tsx:43-113` | SSO / 企微 / LDAP 按钮渲染逻辑不变，仅换端点；`isPro` 门控保留 | 自动跳转（`login.tsx:52-107`）与 return_to 契约（`utils/loginReturnTo.ts`）不变 |
-| `platform/src/controllers/API/license.ts` | `getLicenseStatus`（ETL 404-silent）保留；`reportGatewayLicense` 仅在双跑期需要，自研模式下后端自持 license，前端可不再上报 | banner 逻辑（`licenseBannerGateway.ts` 24h staleness）不改 |
+| `platform/src/controllers/API/license.ts` | `getLicenseStatus`（ETL 404-silent）保留；`reportGatewayLicense` 仅在双跑期需要，自研模式下后端**只读** `license_info`，前端可不再上报 | banner 逻辑（`licenseBannerGateway.ts` 24h staleness）不改 |
 | `platform/src/pages/SystemPage/dsh/DshContentSafetySettings.tsx` | 端点由 `/api/sensitive/dsh/*`（Java gateway）切到后端同路径兼容路由；契约字段已对齐（§5.4 映射层），**页面零改动** | 样式 scope 插件 `dshContentSafetyStyles` 要求新子组件必须放 `src/pages/SystemPage/dsh/`（`vite.config.mts:52`） |
 | 新页面：限流规则 + 拦截记录 | 系统管理新 tab（或并入 `DepartmentTrafficControl` / Pro 安全页） | 三语文案；分页沿用既有模式 |
 | `platform/vite.config.mts:174-181` | `VITE_GATEWAY_PROXY_TARGET` 的 `/api/license` 独立代理在自研模式可退场（后端无此路径，404-silent 已兼容） | 注意"更具体前缀先注册"注释（`:197-217`） |
@@ -434,11 +438,12 @@ gateway:
 |---|---|---|
 | `LoginSyncService.execute` 的 11 步契约（用户 upsert / 跨源收养 / 租户闸门） | 内部 Python API | sso_sync 改字段会静默改变 SSO 登录结果；**必须加契约测试** |
 | `LoginUser.create_access_token` claims 结构 | 内部 Python API | 改 claims = 全平台令牌失效 |
-| `license_info` 表 + ETL 同步及时性 | 数据契约 | ETL 挂 → license 门按缓存降级（60s）→ 过期临界窗口 |
+| `license_info` 表（**只读**）+ Owner 的写入时效 | 数据契约 | 门按 `expire_date` 裁决，续期最长在 ETL 陈旧窗口（`aggregator.py:16` 1 小时）内被看到；F120 不得改 `etl_sync.py` 或新增写入路径（release-contract 第 49 行只允许读取/调用 Owner Service） |
+| `LicenseInfoRepository.get_all` / `compute_display_state` / `compute_days_remaining` / `list_license_status` | 内部 Python API（只读调用） | Owner 改函数签名或改有效期重算规则 → 门与横幅给出不一致的授权状态；必须加契约测试（过期行 → 商业面 26603、开源面放行） |
 | `sensitive_word_policy` 唯一键与缓存失效（`clear_cache`） | 数据契约 | 绕过 service 直改表会导致 AC 自动机缓存陈旧 |
 | `delete_group` Redis 频道 | 隐式数据契约 | user_group 模块改频道名 → 限流规则缓存失效失灵 |
 | `department.concurrent_session_limit` 字段 | 数据契约 | department 模块改字段语义 → 在线阈值失真 |
-| `sensitive_word_policy` 表的租户过滤（该模块不在 `_TENANT_AWARE_MODEL_MODULES` 清单内） | 数据契约 | 目前靠偶然 import 获得租户自动填充；后端重构切断 import 链 → DSH 策略静默写 root 租户（§5.7 补登记） |
+| `sensitive_word_policy` 表的租户过滤（该模块不在 `_TENANT_AWARE_MODEL_MODULES` 清单内） | 数据契约 | 目前靠 `api/router.py:71` 的偶然 import 获得租户自动填充——已核实该 import 边当前存在（`sensitive_word/domain/models/sensitive_word_policy.py:16` 有 `tenant_id`，不在 `_EXCLUDED_TABLES`），因此**今天已是过滤状态**；补登记只是防未来重构切断 import 链（§5.7），不改变现有行为、不需要数据订正 |
 | 第三方 IdP 的 token / userinfo 响应结构（由 `userNameJsonPath` 等配置适配） | 第三方服务契约 | IdP 改版改字段名或改错误信封 → 映射静默取到空用户名或报 26606；适配层必须对缺失字段显式报错 |
 | `ldap3` 新依赖 | 系统依赖 | 许可评审 + 镜像体积 |
 
@@ -447,8 +452,8 @@ gateway:
 ## 7. 测试与可观测
 
 - **单元**：Lua 脚本（令牌桶 / 在线计数，CI 起真实 Redis，禁 mock 掉时间语义）；OAuth state 一次性消费；Provider 配置校验（26608）；DSH 策略 ↔ `SensitiveWordPolicyPayload` 映射 round-trip；`license_gate` 裁决纯函数表驱动。
-- **集成**：中间件顺序（租户 ContextVar 对 Gateway 可见——回归 CustomMiddleware 的 subject stash）；双面对决拒绝语义（v1 信封 vs v2 真 429）；LDAP bind（mock ldap3 server）；SSO 回调端到端（mock IdP：authorize→token→userinfo→login-sync→Cookie）；license fail-closed（过期行 → 商业面 26603、开源面放行）。
-- **e2e**（`/e2e-test` 双层）：API 层 pytest 走完整登录 → 聊天命中敏感词 → 拦截记录可查；页面手动清单覆盖登录页 SSO 按钮、DSH 设置页、限流规则 CRUD、License 横幅。
+- **集成**：中间件顺序（租户 ContextVar 对 Gateway 可见——回归 CustomMiddleware 的 subject stash）；双面对决拒绝语义（v1 信封 vs v2 真 429）；LDAP bind（mock ldap3 server）；SSO 回调端到端（mock IdP：authorize→token→userinfo→login-sync→Cookie）；license fail-closed（过期行 → 商业面 26603、开源面放行）；**已接入面零变化回归**（AC-24：接入前后对同一命中输入的话术 / `DshSensitivePolicy` 事件 / 错误信封逐一比对）。
+- **e2e**（`/e2e-test` 双层）：API 层 pytest 走完整登录 → 聊天命中敏感词 → 拦截记录可查；页面手动清单覆盖登录页 SSO 按钮、DSH 设置页、限流规则 CRUD、License 横幅。**前置 fixture**：先经 Owner 的 `upsert_mapped` 写一条未过期 `license_info` 行（`license_codes` 内），否则 SSO 登录入口被 26603 挡住，e2e 无法登录。
 - **手动验证**：`BISHENG_PRO=true` + `gateway.enabled=true` 本地起后端；登录页出现 SSO 入口；聊天触发 `auto_reply`；连续打满 QPS 见 26601；WS 超限见 close 4029。
 - **可观测**：中间件命中 / 拒绝计数走 loguru 结构化日志（沿用 `HTTP_ACCESS_METRIC` 风格做 `GATEWAY_METRIC` 标记，`utils/http_middleware.py:535`）；license 状态、限流拒绝率、在线计数峰值接入既有 telemetry journal（`common/constants/enums/telemetry.py`）；拦截记录表本身即审计面。
 
@@ -493,4 +498,4 @@ gateway:
 | 日期 | 改动 | 触发原因 |
 |---|---|---|
 | 2026-11-10 | 初版：8 项核心决策、能力盘点矩阵、目标形态、数据模型、灰度路径 | 用户提出"基于当前代码库自研扩充网关能力"，先沉淀设计再进 SDD spec 评审 |
-| 2026-11-10 | design 评审后修订：RSA 私钥改 Fernet 密文（C6）；新表与 `sensitive_word` 模型补租户过滤登记（C3）；SSO 登录入口纳入 License 授权门并与 spec AC-02/33/34/47 对齐；补企微组织同步调度（AC-45）与网页内嵌落地（AC-48）设计；决策 5 补备选方案、决策 4/5/7/8 补"何时该重新考虑"；§6 补依赖风险点与新端点数据格式；§5.7 修正 logic_delete 声明；§8 补坑 15 | `/sdd-review design` 报 3 high（C6 / C3 / 与 spec 矛盾）+ 12 medium/low；用户裁决：Fernet 密文、补齐登记、SSO 纳入授权门 |
+| 2026-11-10 | tasks 评审后修订：License 子系统改为**只读** `license_info`（F120 不写表、不改 `etl_sync.py`、不新增 ETL/上报入口，符合 release-contract 第 49 行；原「复用 `sync_etl_license` 取 `source='gateway'` 行」经核实不成立——该函数无 source 参数）；新增 `license_codes: [etl, gateway]` 配置与续期延迟取舍；§6.2 授权依赖改列并标注 `compute_display_state` 契约测试要求；§6.2 修正 `sensitive_word_policy` 租户过滤现状（已核实 `api/router.py:71` 导入边存在，补登记不改变现有行为）；§7 补已接入面零变化回归（AC-24）与 e2e license fixture 前置 | `/sdd-review tasks` 报 1 high（T015/T016 越权改 Owner 写入路径）+ 7 medium；用户裁决：按建议改为只读方案、4029 客户端提示纳入本期 |

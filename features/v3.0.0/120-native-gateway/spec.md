@@ -111,7 +111,7 @@
 
 - **AC-33** — WHEN 授权缺失或已过期，THE SYSTEM SHALL 拒绝 SSO/OAuth 登录入口与本期新增商业能力管理面（DSH 敏感词策略管理、限流规则管理、拦截记录查询）的请求，按面返回 26603 或 403，且不缓存过期后的放行决定；授权状态查询端点保持可访问，以供前端展示真实授权状态。
 - **AC-34** — WHERE 授权缺失或已过期，THE SYSTEM SHALL 不影响平台核心面、开放 API、DSH 本地接入面与授权状态查询的可用性与响应语义（AC-02）。
-- **AC-35** — WHEN 授权状态变化，THE SYSTEM SHALL 从授权表与同步任务取得状态，并使前端 License 横幅反映真实状态。
+- **AC-35** — WHEN 授权状态变化，THE SYSTEM SHALL 从授权表与同步任务取得状态，并使前端 License 横幅反映真实状态。（2026-11-10 澄清：`license_info` 的 Owner 是 `commercial_license`，同步任务沿用其既有 ETL beat 与 `POST /api/v1/commercial-licenses/gateway` 注入入口；F120 **只读**该表、不新增写入路径，design 决策 6。本条验收口径不变。）
 - **AC-36** — WHILE Java gateway 仍在位，THE SYSTEM SHALL 保留外部授权注入入口，不因自研网关接入而失效。
 - **AC-47** — IF 授权状态无法取得（存储不可用或同步任务未产出），THEN THE SYSTEM SHALL 按 fail-closed 拒绝 SSO/OAuth 登录入口与本期新增商业能力管理面并留下可观测痕迹，平台核心面、开放 API、DSH 本地接入面与授权状态查询不受影响。
 
