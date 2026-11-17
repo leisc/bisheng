@@ -2030,6 +2030,15 @@ class KnowledgeSpaceService(KnowledgeUtils):
         res = await KnowledgeDao.async_get_spaces_by_ids(list(members_map.keys()), order_by)
         # Pin state comes from the per-user pin table, not the legacy member row.
         pinned_ids = await KnowledgeSpaceUserPinDao.list_pinned_space_ids(self.login_user.user_id)
+        # 补齐创建人名: /square 的 KnowledgeSpaceInfoResp 会带 user_name, 而这里的
+        # KnowledgeSpaceListItemResp 不带, 于是同一行在「全部公开」下显示 admin,
+        # 在「我创建的」下显示空白, 列表对不上。按 F030 同一套做法, 用 user_id
+        # 反查一次用户表补上 (参考 2318 行那段)。
+        creator_ids = {one.user_id for one in res if one.user_id is not None}
+        creator_name_map: dict[int, str] = {}
+        if creator_ids:
+            creators = await UserDao.aget_user_by_ids(list(creator_ids)) or []
+            creator_name_map = {u.user_id: u.user_name for u in creators}
         pinned_spaces = []
         normal_spaces = []
         for one in res:
@@ -2052,6 +2061,7 @@ class KnowledgeSpaceService(KnowledgeUtils):
                     KnowledgeSpaceListItemResp(
                         **one.model_dump(),
                         is_pinned=False,
+                        user_name=creator_name_map.get(one.user_id, str(one.user_id)),
                         user_role=member_conf.user_role,
                         subscription_status=SpaceSubscriptionStatusEnum.SUBSCRIBED,
                         is_followed=True,

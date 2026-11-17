@@ -110,6 +110,31 @@ class KnowledgeUtils(BaseService):
         return res
 
     @classmethod
+    def extract_qa_answer(cls, meta: dict) -> str:
+        """Pull the answer body out of a QA chunk's ``extra`` metadata.
+
+        QA ingest (``knowledge_imp.QA_save_knowledge``) embeds the question only
+        and packs the answer into ``metadata['extra']`` as
+        ``{"answer": ..., "main_question": ...}``. ``page_content`` therefore
+        never carries the answer, so a retrieved QA chunk used to surface just
+        the question. Returns "" for document chunks and for malformed JSON.
+        """
+        raw = meta.get("extra") or ""
+        if not raw:
+            return ""
+        if isinstance(raw, dict):
+            data = raw
+        else:
+            try:
+                data = json.loads(raw)
+            except (TypeError, ValueError):
+                return ""
+        if not isinstance(data, dict):
+            return ""
+        answer = data.get("answer")
+        return str(answer).strip() if answer else ""
+
+    @classmethod
     def chunk2promt(cls, chunk: str, metadata: dict) -> str:
         # Video Wall ProcessingchunkAndmetadatadata in to get a newchunk
         res = f"[file name]:{metadata.get('source', '')}\n[file content begin]\n{chunk}[file content end]\n"
@@ -152,6 +177,13 @@ class KnowledgeUtils(BaseService):
             if raw_content.endswith(citation_suffix):
                 raw_content = raw_content[: -len(citation_suffix)].rstrip()
         content = cls.split_chunk_metadata(raw_content).strip()
+        # QA 入库时只把问题写进 page_content（见 knowledge_imp.QA_save_knowledge），
+        # 答案整段塞在 metadata['extra'] 的 JSON 里。这里只读 page_content，
+        # 于是检索永远只召回问题、召回不到答案，模型只能看到标题自说自话。
+        # 把 extra.answer 拼回去；文档库的 extra 没有 answer 键，行为不变。
+        qa_answer = cls.extract_qa_answer(meta)
+        if qa_answer:
+            content = f"{content}\n{qa_answer}" if content else qa_answer
         kb_id_raw = meta.get("knowledge_id") or meta.get("kb_id") or ""
         kb_id = str(kb_id_raw) if kb_id_raw not in (None, "") else ""
         return (
