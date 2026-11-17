@@ -6,6 +6,7 @@ import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import KnowledgeFile from "./KnowledgeFile";
 import KnowledgeQa from "./KnowledgeQa";
+import KnowledgeSpace from "./KnowledgeSpace";
 
 
 export default function KnowledgePage() {
@@ -25,6 +26,7 @@ export default function KnowledgePage() {
                 className="w-full mb-10 [&>div:first-child]:mx-2 [&>div:first-child]:mb-2" items={[
                 { key: 'file', label: t('lib.fileData'), icon: <Outlined.Books aria-hidden="true" />, children: <KnowledgeFile toolbarTarget={toolbarTarget} /> },
                 { key: 'qa', label: t('lib.qaData'), icon: <Outlined.BookOpenText aria-hidden="true" />, children: <KnowledgeQa toolbarTarget={toolbarTarget} /> },
+                { key: 'space', label: t('lib.spaceData'), icon: <Outlined.FolderOpen aria-hidden="true" />, children: <KnowledgeSpace toolbarTarget={toolbarTarget} /> },
             ]} />
         </div>
     );

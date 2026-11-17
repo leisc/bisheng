@@ -70,8 +70,8 @@ export default defineConfig({
   root: path.join(__dirname, '../packages/ui/docs'),
   // Build output next to the docs source (gitignored; CI artifact only).
   outDir: path.join(__dirname, '../packages/ui/doc_build'),
-  title: 'BISHENG 组件库',
-  description: 'BISHENG client 设计规范 + 组件库',
+  title: 'INSOFT 组件库',
+  description: 'INSOFT client 设计规范 + 组件库',
   lang: 'zh', // single language — i18n intentionally not enabled (req 5)
   // No SSG: demos import real app components, whose dependency tree reaches
   // browser/node-conditional packages (@dicebear/converter resolves its `node`

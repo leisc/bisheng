@@ -52,7 +52,7 @@ export default function InvitationCodeForm({ showCode, setShowCode }) {
         <Dialog open={showCode} onOpenChange={setShowCode}>
             <DialogContent className="sm:max-w-[560px]">
                 <div className="p-2">
-                    {/* BISHENG Logo */}
+                    {/* INSOFT Logo */}
                     <div className="" style={{ backgroundImage: `url('${__APP_ENV__.BASE_URL}/assets/diandian.png')` }}>
                         <div className="text-2xl font-bold text-primary pt-20 pl-8">{localize('com_invite_title')}</div>
                         {/* Description */}

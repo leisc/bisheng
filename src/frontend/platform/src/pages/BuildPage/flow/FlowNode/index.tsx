@@ -251,7 +251,7 @@ function CustomNode({ data: node, selected, isConnectable }: { data: WorkflowNod
                 {/* top */}
                 <RunLog node={node}>
                     <div className='bisheng-node-top flex items-center'>
-                        {t('bisheng', { ns: 'bs' }) === 'BISHENG' && <LoadingIcon className='size-5 text-[#B3BBCD]' />}
+                        {t('bisheng', { ns: 'bs' }) === 'INSOFT' && <LoadingIcon className='size-5 text-[#B3BBCD]' />}
                         <span className='node-face text-sm text-[#B3BBCD]'>{t('bisheng', { ns: 'bs' })}</span>
                     </div>
                 </RunLog>

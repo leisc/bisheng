@@ -68,8 +68,8 @@ i18n
     interpolation: {
       escapeValue: false,
       defaultVariables: {
-        bisheng: config.brandName?.en || 'BISHENG',
-        bishengZh: config.brandName?.zh || 'BISHENG',
+        bisheng: config.brandName?.en || 'INSOFT',
+        bishengZh: config.brandName?.zh || 'INSOFT',
         linsight: config.linsightAgentName?.en || 'Linsight',
         linsightZh: config.linsightAgentName?.zh || '灵思',
         linsightFull: 'Linsight',

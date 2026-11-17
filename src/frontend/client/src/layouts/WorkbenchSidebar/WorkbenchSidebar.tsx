@@ -16,7 +16,7 @@ import { SidebarProjects } from './SidebarProjects';
 import { splitSidebarEntries, useSidebarEntries } from './useSidebarEntries';
 
 /** Shown next to the logo when the admin has not configured a 首页 display name. */
-const DEFAULT_BRAND_NAME = 'BISHENG';
+const DEFAULT_BRAND_NAME = 'INSOFT';
 
 const BRAND_LINK = 'flex h-8 min-w-0 items-center gap-2.5';
 

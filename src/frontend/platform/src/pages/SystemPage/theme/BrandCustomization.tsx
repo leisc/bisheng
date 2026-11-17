@@ -432,7 +432,7 @@ export default function BrandCustomization() {
     return (
         <div className="h-full min-h-0 overflow-y-auto border-t bg-accent">
             {loading ? (
-                // Wait for the API before rendering, so the BISHENG defaults
+                // Wait for the API before rendering, so the INSOFT defaults
                 // don't flash in before the saved config arrives.
                 <div className="flex h-full items-center justify-center">
                     <LoadingIcon className="size-7" />

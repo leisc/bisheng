@@ -30,6 +30,7 @@ const AdjustFilesUpload = lazy(() => import("@/pages/KnowledgePage/AdjustFilesUp
 const FilesPage = lazy(() => import("@/pages/KnowledgePage/detail"));
 const FilesUpload = lazy(() => import("@/pages/KnowledgePage/filesUpload"));
 const QasPage = lazy(() => import("@/pages/KnowledgePage/qas"));
+const SpaceFiles = lazy(() => import("@/pages/KnowledgePage/SpaceFiles"));
 const LabelPage = lazy(() => import("@/pages/LabelPage"));
 const TaskAppChats = lazy(() => import("@/pages/LabelPage/taskAppChats"));
 const TaskApps = lazy(() => import("@/pages/LabelPage/taskApps"));
@@ -86,6 +87,7 @@ const privateRouter = [
       { path: "filelib/upload/:id", element: <FilesUpload />, permission: 'knowledge', },
       { path: "filelib/adjust/:fileId", element: <AdjustFilesUpload />, permission: 'knowledge', },
       { path: "filelib/qalib/:id", element: <QasPage />, permission: 'knowledge', },
+      { path: "filelib/space/:id", element: <SpaceFiles />, permission: 'knowledge', },
       { path: "build/apps", element: <Apps />, permission: 'build', },
       // F054 hosted-application detail. Rides the existing `build`
       // permission on purpose: AC-58 forbids a new menu or permission point.

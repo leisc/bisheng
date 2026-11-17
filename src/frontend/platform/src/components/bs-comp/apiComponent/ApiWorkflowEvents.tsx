@@ -10,7 +10,7 @@ import { JsonItem } from './ApiAccess';
 
 export function ApiWorkflowEvents() {
     const { t } = useTranslation()
-    const brand = t('bisheng') === 'BISHENG' ? '' : t('bisheng')
+    const brand = t('bisheng') === 'INSOFT' ? '' : t('bisheng')
 
     return (
     <Card className="mb-8">
