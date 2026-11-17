@@ -41,6 +41,31 @@ sso_sync:
   gateway_hmac_secret: "bisheng-local-hmac-20260422"
   signature_header: "X-Signature"
 
+# 原生网关（F120）：总开关，默认全关。enabled: false 时网关中间件与路由均不注册。
+# 开启后按下面的子开关逐个放量；商业面（license_faces）默认 fail-closed，
+# 未写入有效 license_info 行时这些路径直接拒绝，而 /api/v1/dsh/** 与授权状态查询
+# 始终不受该门约束（否则授权过期后前端无法解释为何被锁）。
+# gateway:
+#   enabled: false
+#   license_gate: true
+#   license_codes: [etl, gateway]
+#   license_faces:
+#     - /api/v1/gateway/oauth2/
+#     - /api/v1/gateway/sensitive/
+#     - /api/v1/gateway/rate-rules
+#     - /api/v1/gateway/block-records
+#   filter_url: []
+#   home_url: http://host:port
+#   rate_limit:
+#     enabled: false
+#     default_qps: 10
+#   online:
+#     enabled: false
+#   oauth:
+#     state_ttl_seconds: 600
+#     http_timeout_seconds: 5
+#   route_ownership: []
+
 # 集群模式或者哨兵模式（只能选其一）:
 # redis_url: 
 #   mode: "cluster"

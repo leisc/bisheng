@@ -13,6 +13,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 
 from bisheng.core.config.app_runtime import AppRuntimeConf
 from bisheng.core.config.dsh import DshSettings
+from bisheng.core.config.gateway import GatewaySettings
 from bisheng.core.config.llm import LLMConf
 from bisheng.core.config.multi_tenant import MultiTenantConf
 from bisheng.core.config.open_platform import OpenApiConf, OpenMcpConf, OpenPlatformConf
@@ -981,6 +982,12 @@ class Settings(BaseModel):
         default_factory=DshSettings,
         description="DSH Desktop access, gateway trust, verified model capabilities and quota infrastructure configuration.",
     )
+    # F120 native gateway. Ships disabled: `enabled: false` means no middleware and
+    # no route is registered, so a fresh deployment cannot grow one by accident.
+    gateway: GatewaySettings = Field(
+        default_factory=GatewaySettings,
+        description="Native gateway master switch, commercial license gate, traffic control and SSO provider timeouts.",
+    )
     database_url: str | None = None
     redis_url: Union[str, dict] | None = None
     celery_redis_url: Union[str, dict] | None = None
@@ -1105,7 +1112,11 @@ class Settings(BaseModel):
     @classmethod
     def validate_lists(cls, values):
         for key, value in values.items():
-            if key not in {"dev", "dsh"} and not value:
+            # `dev` and `dsh` keep their falsy value: both are nested models whose
+            # sub-fields default to "off", and turning them into `[]` would make
+            # pydantic reject the config file. `gateway` (F120) is a third such
+            # section and must not be blanked into `[]` either.
+            if key not in {"dev", "dsh", "gateway"} and not value:
                 values[key] = []
         return values
 

@@ -702,5 +702,13 @@
   "25025": "A permission model with this name already exists.",
   "25026": "The last owner of this resource cannot be removed.",
   "19704": "The tenant view changed. Refresh the page before continuing.",
-  "19705": "No valid tenant view is available. Contact an administrator."
+  "19705": "No valid tenant view is available. Contact an administrator.",
+  "26601": "Too many requests, please try again later",
+  "26602": "The online session limit has been reached, please try again later",
+  "26603": "Gateway authorization failed, please sign in again",
+  "26604": "Login state verification failed, please sign in again",
+  "26605": "This sign-in method is unavailable, please contact your administrator",
+  "26606": "Your session has expired, please sign in again",
+  "26607": "LDAP directory verification failed, please contact your administrator",
+  "26608": "The gateway configuration is incomplete or malformed, please contact your administrator"
 }

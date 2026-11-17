@@ -61,12 +61,41 @@
 | --- | --- | --- | --- |
 | [x] | T006 测试/Domain | `BT/test_gateway_models.py`：三表 ORM round-trip（`gateway_oauth_provider`/`gateway_rate_rule`/`gateway_block_record`）、唯一键冲突、`logic_delete` 语义、租户列非空。覆盖 AC: AC-40。**2026-11-17 实施记录**：19 条用例全绿（`test/gateway` 目录合计 49 条，含 Wave 0 的 30 条）。实现期追加三处原任务文本未覆盖的断言——① `_TENANT_AWARE_MODEL_MODULES` 与 `_discover_tenant_aware_tables()` 含三表（C3：漏登记的模块会静默绕过租户过滤，这是 `tenant_filter.py` 头注里点名的历史事故模式）；② `gateway_block_record` 列集合**恰好**等于 design §5.7 的 12 列（append-only 表无 `logic_delete`/`update_time`，用列集合断言而非逐字段，防止后人补一列就破坏只增语义）；③ alembic 单 head 断言（从版本文件静态推导，不连库）。**测试隔离偏差**：本文件加 `_no_tenant_context` autouse fixture 置 `_bypass_tenant_filter=True`——`register_tenant_filter_events` 是**进程级全局**监听器，任何先构建真实 `CustomMiddleware` 的测试模块都会替整个 pytest 进程注册它，此后无租户上下文的 SELECT 会被解析成 `DEFAULT_TENANT_ID`，Repository 在 INSERT 后发的 `refresh()` 因此查不到 `tenant_id=3` 的行（现象 `Could not refresh instance`）。生产环境请求恒有租户上下文，故这不是代码缺陷；过滤本身的读写行为归 T061 集成测试 | 无；T007 |
 | [x] | T007 Domain/基础设施 | `BE/gateway/domain/models/{oauth_provider,rate_rule,block_record}.py` + 各 Repository classmethod（get/aget/create/update/delete + 规则解析查询）+ `BE/core/database/alembic/versions/<date>_f120_gateway_tables.py`（`down_revision` 取当日 heads）+ `features/v3.0.0/release-contract.md` 表 1 追加三表 Owner=F120，**并登记 `sensitive_word_policy` 的 `dsh_chat` 策略管理面 Owner=F120（承接 F111 的 Gateway 侧前提，修订记录见 F111 spec）**。**回滚方案**：三表无外部依赖方（只有本 Feature 读写），`downgrade` 整批 `drop_table` 即可；`release-contract.md` 的归属登记随 F120 下线同步删除（登记本身不改运行时行为）。**不写 `license_info`**（Owner 是 `commercial_license`，release-contract 第 49 行只允许读取/调用）。覆盖 AC: AC-40。**2026-11-17 实施记录**：三模型 + 三 Repository 落地；迁移文件 `v3_0_0_f120_gateway_tables.py`（`down_revision='f114_app_authorization'`，取自当日 `uv run alembic heads` 实跑输出，非规划期快照）；`uv run alembic heads` 复核为单 head。release-contract 表 1 追加 4 行（三表 Owner=F120 + `dsh_chat` 管理面 Owner=F120），未新增 `license_info` 行。三模块已登记进 `_TENANT_AWARE_MODEL_MODULES`。**实现期决策**：① 唯一键均含 `logic_delete`——软删后同一业务键必须可再次插入，否则租户删除过的 provider/规则永远无法重建（T006 用用例锁住）；② `GatewayBlockRecord.id` 用 `BigInteger().with_variant(Integer,'sqlite')`——SQLite 下 `BIGINT PRIMARY KEY` 不享 rowid 别名、不自增，而 `test_gateway_models.py` 要 round-trip；MySQL/DM8 仍为 BIGINT；③ Repository 的读全部显式带 `tenant_id` 谓词，不依赖监听器（T061 另证过滤）；`GatewayOAuthProviderRepository.redact_config` 把 `client_secret` 等 6 类机密键掩码为 `***`，管理面只回该副本（C6）；④ `resolve_rule` 用 ≤4 次索引查询按候选序取首个命中，同作用域内 resource_id 精确优先于类型全量——未用 SQL `CASE` 排序，候选列表短且可读性优先 | T006 |
-| [ ] | T008 测试/基础设施 | `BT/test_gateway_errcode.py`（码值唯一、区间 26600–26699、继承 BaseErrorCode）；`BE/common/errcode/gateway.py`（26601 限流 / 26602 在线超限 / 26603 授权 / 26604 state / 26605 provider / 26606 换 token / 26607 LDAP / 26608 配置非法）+ README 模块段注册（三语文案与生成器另走 T065，本任务不碰 `LOC/`）。覆盖 AC: AC-39, AC-40 | 无；T009 |
-| [ ] | T065 基础设施 | `LOC/api_errors/{zh-Hans,en,ja}.json` 三语各一次编辑（F120 模块段文案）+ 跑 i18n 生成器更新派生文件 + 过 `pnpm --filter @bisheng/locales check`（2026-11-10 从 T008 拆出：三语文案与代码校验器是不同性质的改动，单独一步便于 review 与回退）。覆盖 AC: AC-39, AC-40 | T008 |
-| [ ] | T009 测试/基础设施 | `BT/test_gateway_settings.py`：`gateway.enabled=false` 时中间件与路由均不装配；`license_faces`/`filter_url`/`default_qps` 解析与默认值；**断言默认 `license_faces` 恰为四个商业面前缀（`/api/v1/gateway/oauth2/`、`/api/v1/gateway/sensitive/`、`/api/v1/gateway/rate-rules`、`/api/v1/gateway/block-records`），且不含 `/api/v1/dsh/` 与 `/api/v1/gateway/license/`**（授权状态查询须在过期时仍可访问，AC-35）；**断言 `license_codes` 默认 `[etl, gateway]`**（自研部署只有 ETL 行，双跑期另有 gateway 行，任一有效即放行——决策 6）；strict 模式拒绝未知键。覆盖 AC: AC-01, AC-02 | 无；T010 |
-| [ ] | T010 基础设施 | `BE/core/config/gateway.py`（`GatewaySettings`，frozen + strict 仿 `core/config/dsh.py`）+ `BE/core/config/settings.py` 挂载 + `CFG/config/config.yaml` 增加 `gateway:` 段（默认全关） | T009 |
-| [ ] | T061 测试/基础设施 | `BT/test_gateway_tenant_filter.py`：断言 `_TENANT_AWARE_MODEL_MODULES` 含 `bisheng.gateway.domain.models.*` 与 `bisheng.sensitive_word.domain.models`；子租户会话下建三表新行 `tenant_id` 自动填充、跨租户查询被 `do_orm_execute` 过滤、root 会话可见全部；DSH 策略行在子租户下 `tenant_id` 非 root。覆盖 AC: AC-40（constitution C3） | T006, T007；T062 |
-| [ ] | T062 基础设施 | `BE/core/database/tenant_filter.py`：把 `bisheng.gateway.domain.models`（三个模型模块）与 `bisheng.sensitive_word.domain.models` 加入白名单（design §5.7；漏登记 = 新表跨租户可见，正是 v2.5 knowledgefile / flowversion / roleaccess 写 root 的成因） | T061 |
+| [x] | T008 测试/基础设施 | `BT/test_gateway_errcode.py`（码值唯一、区间 26600–26699、继承 BaseErrorCode）；`BE/common/errcode/gateway.py`
+  · 26600–26699 段经全模块扫描确认为空（26x 已用 261 dsh/dsh_audit · 262 dsh_market · 263 model_face · 264 mcp_face · 265 app_publish · 270 commercial_license），未撞任何既有码；`README.md` 补第 20 节「原生网关模块 266」
+  · 测试实现时发现 `model_face.ModelFaceError` 是无 `Code` 的抽象基类，`_classes()` 加 `hasattr(obj, 'Code')` 过滤，否则跨模块碰撞检查会误报
+  · 8 个码（26601 限流 / 26602 在线超限 / 26603 授权 / 26604 state / 26605 provider / 26606 换 token / 26607 LDAP / 26608 配置非法）在 `test_documented_codes_exist_with_the_documented_meaning` 中逐码钉死，改名/改号即红（前端 switch 契约）
+  · 2026-11-17 实现，6 tests passed | 无；T065
+| [x] | T065 基础设施 | `LOC/api_errors/{zh-Hans,en,ja}.json` 三语各一次编辑（F120 模块段文案）+ 跑 i18n 生成器更新派生文件 + 过 `pnpm --filter @bisheng/locales check`
+  · 8 个码三语各一次编辑（26601–26608），与 `BE/common/errcode/gateway.py` 的 `Msg` 一一对应；`zh-Hans` 用后端同款中文文案，`en`/`ja` 另写
+  · 只追加 8 个键，无重排（JSON 顺序即可读性，diff 只有 +8 行）
+  · `pnpm --filter @bisheng/locales build` 生成 6 个派生文件（platform 3 + client 3），`--check` 退出码 0
+  · 2026-11-17 实现 | 无；T008
+| [x] | T009 测试/基础设施 | `BT/test_gateway_settings.py`：`gateway.enabled=false` 时中间件与路由均不装配；`license_faces`/`filter_url`/`default_qps` 解析与默认值
+  · 13 tests passed（先红后绿：`ModuleNotFoundError: No module named 'bisheng.core.config.gateway'` × 11 + `AttributeError: 'Settings' object has no attribute 'gateway'`）
+  · 默认 `license_faces` 恰为四个商业面前缀，且显式断言不含 `/api/v1/dsh/` 与 `/api/v1/gateway/license/`（AC-35）
+  · `license_codes` 默认 `[etl, gateway]`（决策 6）；`filter_url` 默认空（新部署不会被限流）
+  · frozen（`ValidationError` on assignment）+ `extra='forbid'` 拒绝未知键（`lisence_faces` 拼错必须是启动失败，不能看起来像门没开）
+  · 2026-11-17 实现 | 无；T010
+| [x] | T010 基础设施 | `BE/core/config/gateway.py`（`GatewaySettings`，frozen + strict 仿 `core/config/dsh.py`）+ `BE/core/config/settings.py` 挂载 + `CFG/config/config.yaml` 增加 `gateway:` 段（默认全关）
+  · `GatewaySettings` / `GatewayRateLimitSettings` / `GatewayOnlineSettings` / `GatewayOAuthSettings` 四层，全部 `extra='forbid', strict=True, frozen=True`
+  · `settings.py` 挂载 `gateway: GatewaySettings`；**同时把 `gateway` 加入 `validate_lists` 的 `{'dev','dsh'}` 例外集**——该 validator 会把所有 falsy 顶层值改成 `[]`，漏掉这一行会让 `gateway:` 空段变成 `[]` 并被 pydantic 拒掉（这正是 `dsh` 在例外集里的原因）
+  · 提交前发现 `src/backend/bisheng/config.yaml` 被 `src/backend/bisheng/.gitignore` 忽略——改它不会进版本库，T009 原本对着它断言等于对着一个没人提交的文件测试，fresh clone 必红
+  · 改为同时改**两个已跟踪模板** `docker/bisheng/config/config.yaml`（compose 挂载源）与 `docker/helm/bisheng/files/config.yaml`；T009 的 yaml 测试随之改为遍历这两个模板，并新增 `test_local_dev_config_yaml_stays_git_ignored` 钉住「dev 副本永远不承担测试语义」这个前提
+  · 本地 dev 副本仍保留该段（方便本机排查），但测试不再依赖它
+  · 2026-11-17 实现；`create_app()` 冒烟通过：6 层中间件 / 885 路由（网关全关，未新增任何一层）| 无；T009 |
+| [x] | T061 测试/基础设施 | `BT/test_gateway_tenant_filter.py`：断言 `_TENANT_AWARE_MODEL_MODULES` 含 `bisheng.gateway.domain.models.*`；子租户写入自动填 `tenant_id`、跨租户读取被过滤
+  · 8 tests passed（先红：`bisheng.sensitive_word.domain.models.sensitive_word_policy missing from _TENANT_AWARE_MODEL_MODULES`）
+  · `_force_import_all_models()` 进 fixture——白名单是靠 `import` 副作用登记的，不强制导入时 `_discover_tenant_aware_tables()` 为空，测试会假绿
+  · `_tenant_events` fixture 显式调 `register_tenant_filter_events()`：`do_orm_execute` 监听器是**进程级**的，依赖别的测试模块先注册属于顺序耦合
+  · 子租户 `tenant_id` 自动填走 `before_flush`；读裁剪走 `build_tenant_filter_clause`；root 上下文可见全部
+  · 2026-11-17 实现 | 无；T062
+| [x] | T062 基础设施 | `BE/core/database/tenant_filter.py`：把 `bisheng.gateway.domain.models`（三个模型模块）与 `bisheng.sensitive_word.domain.models` 加入白名单
+  · 三个 gateway 模块已在 T007 登记；本次补 `bisheng.sensitive_word.domain.models.sensitive_word_policy`
+  · 按**具体模块**而非包名登记：`sensitive_word/domain/models/__init__.py` 是空文件，导入包名不会带上模型（已核实）
+  · 该表有 `tenant_id` 列但此前不在 `_discover_tenant_aware_tables()` 里——列是装饰品，这正是 v2.5 knowledgefile/flowversion/roleaccess 的 bug 形态
+  · 回归：`test/sensitive_word` + `test/workstation` 的 FAILED 集合在登记前后逐字节相同（12 条既有环境失败），零新增
+  · 2026-11-17 实现 | 无；T061
 
 ## Wave 2：License 准入门（首个可灰度能力）
 

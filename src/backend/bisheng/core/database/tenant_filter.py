@@ -161,6 +161,14 @@ _TENANT_AWARE_MODEL_MODULES = (
     "bisheng.gateway.domain.models.oauth_provider",
     "bisheng.gateway.domain.models.rate_rule",
     "bisheng.gateway.domain.models.block_record",
+    # F111's policy table, whose `dsh_chat` management face is registered by
+    # F120 (T062). It carries tenant_id but nothing on the router import chain
+    # happens to import it, so before this line the column was decoration —
+    # verified: `sensitive_word_policy` was absent from
+    # `_discover_tenant_aware_tables()`. Registered by exact module rather than
+    # by package because `sensitive_word/domain/models/__init__.py` is empty and
+    # would not pull the model in.
+    "bisheng.sensitive_word.domain.models.sensitive_word_policy",
 )
 
 
