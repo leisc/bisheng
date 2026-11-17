@@ -154,6 +154,13 @@ _TENANT_AWARE_MODEL_MODULES = (
     "bisheng.dsh.domain.models.model_audit_setting",
     "bisheng.dsh.domain.models.model_audit_request",
     "bisheng.dsh.domain.models.model_audit_content",
+    # F120 native gateway. All three tables carry tenant_id and are filtered.
+    # `gateway_oauth_provider` deliberately does NOT fall back to a root-owned
+    # global row on read (design §7.3): a tenant with no provider must fail
+    # closed at the gateway, not silently authenticate through root's SSO.
+    "bisheng.gateway.domain.models.oauth_provider",
+    "bisheng.gateway.domain.models.rate_rule",
+    "bisheng.gateway.domain.models.block_record",
 )
 
 

@@ -44,6 +44,10 @@
 | **RuntimeHostIsolationReport**（2026-10-23 设计待确认：Docker 宿主隔离的独立、短期证明） | F054-app-domain-runtime | 安装侧产生、平台持久保存，新部署验证；不接管 F086 节点/操作所有权，不改变 F059 CNI 摘要算法 |
 | **AppSecretConfig**（F055 手动生效规格已确认；单表加密配置设计待确认，取代旧三表自动刷新） | F055-app-publish-pipeline | 应用当前私有资产；仅声明进入版本；F054/F059/F086 通过协议消费，不能复制秘密主数据；不是平台 ApiCredential |
 | **RuntimeAuditQuerySnapshot / RuntimeAuditExport**（2026-10-23 设计待确认：管理员的临时受权查询/导出产物） | F056-app-square-governance | 申请者私有、受租户过滤；QuerySnapshot 仅冻结条件、Export 私有分块完整导出，下载保留期从 ready 起算，无行数/90 天硬上限；只消费 F051/F054/F055 事实，不改写入权 |
+| **GatewayOAuthProvider**（网关自建 SSO / 企业微信扫码 / LDAP 的租户级 OAuth provider 配置，单表 `gateway_oauth_provider`） | F120-native-gateway（2026-11-17 登记） | 拥有 provider 的创建 / 修改 / 启停 / 软删除与配置校验。`config` 内 `client_secret` 等机密字段以 Fernet 密文落库（C6），管理面只回掩码。**读无 root 全局回退**：子租户未配置即网关 fail-closed，不落到 root 的 provider。与 `license_info` 的关系：商业版 License 决定网关能力是否开放，本对象只被读取，不取得 License 对象所有权 |
+| **GatewayRateRule**（限流与并发上限规则：作用域 user / user_group / department / global × 资源类型 assistant / skill / workflow / path，单表 `gateway_rate_rule`） | F120-native-gateway（2026-11-17 登记） | 拥有规则的创建 / 修改 / 删除与「最具体作用域优先」的解析口径（USER → USER_GROUP → DEPARTMENT → GLOBAL；同作用域内 resource_id 精确命中优先于类型全量）。QPS 令牌桶在 Redis Lua 侧执行，本对象只负责规则的权威存储；不接管部门既有的 `concurrent_session_limit` 字段 |
+| **GatewayBlockRecord**（内容安全拦截的只增审计流水：面 / 阶段 / 命中词 / 输入预览 / 话术 / trace_id，单表 `gateway_block_record`） | F120-native-gateway（2026-11-17 登记） | 只增不改、**无 `logic_delete` 无 `update_time`**——拦截记录是证据，租户不得改写自身安全历史；90 天保留由 Celery 任务硬删。六个拦截面（workstation_chat / dsh_chat / channel_article / knowledge_file / open_api_chat / open_api_model）均写入本表。命中判定与词表归 F111 敏感词模块，本对象只拥有落库与查询面 |
+| **SensitiveWordPolicy 的 `dsh_chat` 策略管理面**（既有 `sensitive_word_policy` 对象上的新 `business_type` 值及其管理入口；**非新领域对象**） | F120-native-gateway（2026-11-17 登记，承接 F111 的 Gateway 侧前提，修订记录见 F111 spec） | 只拥有 `dsh_chat` 这一 business_type 的策略读写入口；`sensitive_word_policy` 表本身、词表、命中引擎与其余 business_type 行为仍归 F111。DSH 侧语义以 F111 spec 决议为准 |
 
 **规则**：
 - 非 Owner Feature 的 AC 中不得出现其他对象的"创建/修改/删除"行为，只能"读取"或"调用" Owner 的 Service
