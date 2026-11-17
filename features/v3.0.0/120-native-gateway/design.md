@@ -2,7 +2,7 @@
 
 > **本文档定位 — 现状快照（Why this How）**
 >
-> - `spec.md` 回答 **做什么**（目标、AC、边界）—— 本 feature 的 spec 尚未评审，本文档先行沉淀技术决策与现状事实
+> - `spec.md` 回答 **做什么**（目标、AC、边界）—— spec 已于 2026-11-10 经用户确认（✅ 已评审，48 条 AC），本文档与其对齐
 > - `design.md`（本文）回答 **为什么这么实现**：关键决策、运行时不直观的事实、对外契约
 > - `tasks.md` 是 **流水账**：拆了哪些任务、做了什么改动
 >
@@ -10,15 +10,16 @@
 > - 实现变化 → **覆盖更新本文档**，只留"今天的状态"、不留旧快照；但每个决策保留"为什么 + 被否方案"和坑（护栏，见 §3/§8）
 > - **偏差分级**：推翻已 ★ 确认的决策 → 停下与用户重新确认；纯实现细节 → 直接改 design，不必停
 
-**关联**: [spec.md](./spec.md)（待评审） · [tasks.md](./tasks.md)（待建）
+**关联**: [spec.md](./spec.md)（✅ 已评审 2026-11-10，48 条 AC） · [tasks.md](./tasks.md)（6 Wave / 60 任务，未开工）
 **版本**: v3.0.0
-**最后更新**: 2026-11-10（初版，基于对当前工作树的只读调研；所有行号锚点以当日代码为准）
+**最后更新**: 2026-11-10（初版基于对当前工作树的只读调研；同日经 `/sdd-review design` 后按用户裁决修订——RSA 私钥改 Fernet 密文、新表补租户过滤登记、SSO 登录入口纳入 License 授权门；所有行号锚点以当日代码为准）
 
 ---
 
 ## 1. 目标与非目标
 
-- **目标**：把商业版 Java 网关（`bisheng-gateway`，架构说明见 `docs/architecture/11-gateway.md`）的四类能力——**SSO/OAuth 统一认证、内容安全、流量控制（限流 + 在线计数）、License 准入**——收敛进本仓库后端进程，形成"进程内原生网关层"（`bisheng/gateway/`）。前端在网关模式下直接指向后端，消除"第二套进程 + 第二套数据库 + 第二套密钥 + 两套 HMAC"的长期维护面。
+- **目标**：把商业版 Java 网关（`bisheng-gateway`，架构说明见 `docs/architecture/11-gateway.md`）的四类能力——SSO/OAuth 统一认证、内容安全、流量控制（限流 + 在线计数）、License 准入——收敛进后端进程，形成进程内原生网关层 `bisheng/gateway/`。
+  - 价值：前端在网关模式下直连后端，消除"第二套进程 + 第二套数据库 + 第二套密钥 + 两套 HMAC"的长期维护面（为何不新建代理进程见决策 1）。
 - **非目标**（明确不做，防范围蔓延）：
   - **不做通用反向代理**。HTTP/WS 反代由 nginx（`src/frontend/nginx.conf`）与部署侧承接，不自研代理进程（理由见决策 1）。
   - **不重写敏感词引擎**。AC 自动机、策略、流式扫描全部复用 `bisheng/sensitive_word/`（决策 3）。
@@ -89,13 +90,18 @@
 - **选定**：B
 - **原因**：A 语义错误；C 是另一个域的专用件。Lua 现成先例：`linsight/domain/services/task_message_broadcast.py:9`（`LINDEX + PUBLISH + 条件 LPOP`，单 key 兼容 Cluster）。`quota_redis` 的 admit/settle 是**月度 token 口径**，与 QPS 不是一回事，禁止混用同一 ledger。
 - **失败方向**：Redis 不可用时**限流面 fail-open 放行**（与 `CustomMiddleware` 的 Redis 黑名单检查一致，`utils/http_middleware.py:519` `except: pass`），但打点告警；license 门相反，必须 fail-closed（K4）。
+- **何时该重新考虑**：出现 Redis 多活 / 多集群部署（key 前缀需带集群隔离），或限流口径要从"按 subject"改为"按 IP / API key / 第三方应用"。
 
 ### 决策 5：WebSocket 在线计数 = 纯 ASGI 中间件 + Redis Lua incr/decr + session 映射
 
 - **现状**：仓库**没有**通用 WS 会话计数。`department/api/endpoints/department_limit.py:1-4` 的 docstring 明说：部门级阈值存在 `department.concurrent_session_limit`，**per-resource 限制"直到部门-资源限制表引入前返回空页"**。
+- **备选**：
+  - A. 进程内 dict 计数（每 worker 一份）——与决策 4 备选 A 同样的多 worker 虚低问题，且进程重启即丢计数、断连回收不可靠；
+  - C. 复用 DSH 授权域的会话能力（`dsh/domain/services/authorization.py`）——语义绑死 DSH 授权域，没有"租户 + 组/资源"两级结构。
 - **选定**：新增 `gateway/online/`：中间件拦截 `websocket.connect`（建连前查限额）与 accept/close 事件（incr/decr）；Redis 结构仿 Java gateway 的 `SESSION_ONLINE` 两级映射——`gw_online:{tenant}:{scope}` hash 存计数，`gw_online_session:{session_id}` hash 存"该连接挂在哪个计数 key 下"，断连时据此精确回收，避免泄漏。
 - **阈值来源**：部门 `concurrent_session_limit`（存量字段，只读）+ `gateway_rate_rule.concurrent_limit`（新增列，本 feature 的产品面）。
 - **拒绝方式**：handshake 阶段直接 `websocket.close` code **4029**（应用私有段）+ reason；前端 WS 客户端按业务码弹既有 toast（参照 client `11001` 的处理，`client/src/api/request.ts:207-224`）。
+- **何时该重新考虑**：WS 连接规模大到单 key hash 成为热点（需分片计数 + 近似合并），或前端可消费真正的 HTTP 语义而不必用 4029 私有码。
 
 ### 决策 6：License 准入以 `license_info` 表为准；商业面 fail-closed，平台核心不停摆
 
@@ -114,11 +120,13 @@
   2. 切换 = 改 nginx `PROXY_PASS_URL` / vite target + 停 Java gateway 进程，**零数据迁移**；
   3. **前置重构任务**：把 3 份 HMAC 拷贝收敛到 `common/utils/hmac_signature.py` 唯一实现（`app_runtime/hmac_auth.py:52`、`app_runtime/orchestrator_client.py:113` 各自重写了一份），否则双跑期改签名公式要改 4 处。
 - **被否**：一次性替换（商业客户在网，风险不可控）；`gt_*` 表与平台表双向同步（模型不同构，同步层是长期负债，且 `gt_user_group.id` 与主库组 id 一致这种隐式约定会持续咬人）。
+- **何时该重新考虑**：双跑期结束、Java gateway 停运后，`route_ownership` 应清空并最终删除该配置项——它只是灰度期开关，不留成永久性路径开关。
 
 ### 决策 8：新表 3 张，全部租户感知；错误码新开 26600 段
 
 - **选定**：`gateway_oauth_provider` / `gateway_rate_rule` / `gateway_block_record` 三张新表（§5.7），alembic 迁移 `down_revision` 必须取 `uv run alembic heads` 当日输出（现 head = `f114_app_authorization`，`core/database/alembic/AGENTS.md` 明确警告文件名前缀不表示拓扑顺序）。
 - **错误码**：新文件 `bisheng/common/errcode/gateway.py`，占用 **26600–26699** 段。核实：262xx 已被 `dsh_market.py` 占、263xx 被 `mcp_face.py` 占（且注释声明 `26340+` reserved）、265xx 被 `app_publish.py` 占、270xx = `commercial_license`、28xxx 已用；**266 / 267 / 268 / 269 空闲**，取 266。
+- **何时该重新考虑**：`gateway_block_record` 单表超千万行（需按 face 分区或转冷存），或 26600–26699 段耗尽需再开一段。
 
 ---
 
@@ -143,8 +151,8 @@
 | Java gateway 能力 | 仓库现状（锚点） | 缺口 = 本 feature 要补的 |
 |---|---|---|
 | HTTP/WS 反向代理 | nginx 已承接（`src/frontend/nginx.conf:14-31`） | 无 |
-| **SSO/OAuth**（自定义 SSO / 企微扫码 / 企微网页 / LDAP）+ 签发 JWT + 写 Cookie | 接收侧齐全：`/api/v1/internal/sso/login-sync`（`sso_sync/api/endpoints/login_sync.py:26`）、`/api/v1/departments/sync`、`/api/v1/internal/sso/gateway-wecom-org-sync`（`:64`）；签发 = `LoginUser.create_access_token`（`user/domain/services/auth.py:494`）；企微通讯录 pull 侧有 `org_sync/domain/providers/wecom.py` | **Provider 侧全空**：authorize/callback、LDAP bind、RSA getkey、Provider 配置存储、state 防 CSRF |
-| **内容安全**（请求 + 响应 + SSE） | 执行层齐全：`ac_automaton.py`、`sensitive_word_policy_service.py`、`stream_scanner.py`；workstation 聊天已接入（`chat_service.py:1739/2667/1849-2531`）、linsight（`linsight.py:189`）、频道文章（`channel_service.py:355-380`）、知识库文件（`knowledge_file_pipeline.py:110-115`）；Pro 门控 `sensitive_word_policy_service.py:350-358` | DSH 聊天面（`/api/v1/dsh/chat/completions`）**未接入**；管理面端点 `/api/sensitive/dsh/*` 不存在于后端；旧资源级 `/api/sensitive/saveWords|wordsDetail` 不存在；拦截记录无网关级表 |
+| **SSO/OAuth**（自定义 SSO / 企微扫码 / 企微网页 / LDAP）+ 签发 JWT + 写 Cookie | 接收侧齐全：`/api/v1/internal/sso/login-sync`（`sso_sync/api/endpoints/login_sync.py:26`）、`/api/v1/departments/sync`、`/api/v1/internal/sso/gateway-wecom-org-sync`（`:64`）；签发 = `LoginUser.create_access_token`（`user/domain/services/auth.py:494`）；企微通讯录 pull 侧有 `org_sync/domain/providers/wecom.py` | **Provider 侧全空**：authorize/callback、LDAP bind、RSA getkey、Provider 配置存储、state 防 CSRF；**企微组织同步无任何周期任务**（pull→reconcile 管线已实现但 `OrgReconcileService.reconcile_config` 无调用方，§8 坑 15） |
+| **内容安全**（请求 + 响应 + SSE） | 执行层齐全：`ac_automaton.py`、`sensitive_word_policy_service.py`、`stream_scanner.py`；workstation 聊天已接入（`chat_service.py:1739/2667/1849-2531`）、linsight（`linsight.py:189`）、频道文章（`channel_service.py:355-380`）、知识库文件（`knowledge_file_pipeline.py:110-115`）、开放 API 任务模式（`task_mode_service.py:272`，**抛 `OpenApiContentBlockedError`**）；Pro 门控 `sensitive_word_policy_service.py:350-358` | DSH 聊天面（`/api/v1/dsh/chat/completions`）**未接入**；开放 API 模型协议面（`open_api/api/endpoints/model_gateway.py:48` `/chat/completions`）**未接入**；管理面端点 `/api/sensitive/dsh/*` 不存在于后端；旧资源级 `/api/sensitive/saveWords|wordsDetail` 不存在；拦截记录无网关级表 |
 | **限流 QPS** | DSH 授权有 Redis `rate()`（`dsh/domain/services/authorization.py:23`）；`quota_redis` 是月度 token 口径（`dsh/infrastructure/quota_redis.py:124` admit）；部门并发阈值只存不用（`department_limit.py`） | 通用 QPS 令牌桶、规则表、按面拒绝语义 |
 | **WS 在线计数** | 无（`department_limit.py:1-4` 明说 per-resource 返回空页） | 计数器 + session 映射 + 阈值裁决 |
 | **License** | `commercial_license`：`license_info` 表、ETL 同步、beat 任务、`/api/v1/commercial-licenses/status|gateway`（`commercial_license/api/router.py:19,32`）、前端横幅 | 请求级 fail-closed 准入中间件 |
@@ -240,7 +248,11 @@ common/errcode/gateway.py          # 26600–26699
    → **进程内** LoginSyncService.execute()（同一把 user:sso_lock 锁、同一套跨源收养 / 访客兜底 / 租户闸门）
    → Set-Cookie access_token_cookie（cookie key 与平台登录一致，auth.py:156）+ 302 home_url
 ```
-**LDAP 流**：前端 `GET /api/v1/gateway/getkey` 取 RSA 公钥（PKCS#1 PEM）→ 加密密码 POST `/api/v1/gateway/oauth2/ldap` → 服务端私钥解密 → `ldap3` bind 校验 → 走同一 LoginSyncService。密钥对启动时解析，**持久化在 `config` 表**（新增 `ConfigKeyEnum.GATEWAY_RSA_KEY`，仿 `JWT_SECRET` 的"生成一次 + 落库"模式，`user/domain/services/jwt_secret.py`）；轮换 = 管理端点替换 + 旧密钥保留一个 grace 期（解密侧双钥尝试）。
+**LDAP 流**：前端 `GET /api/v1/gateway/getkey` 取 RSA 公钥（PKCS#1 PEM）→ 加密密码 POST `/api/v1/gateway/oauth2/ldap` → 服务端私钥解密 → `ldap3` bind 校验 → 走同一 LoginSyncService。密钥对启动时解析，私钥以 **Fernet 密文**持久化（新增 `ConfigKeyEnum.GATEWAY_RSA_KEY`，密文存取复用 `app_publish/domain/services/secret_security.py` 的模式）。**不仿 `JWT_SECRET` 的明文落库**：`user/domain/services/jwt_secret.py:81` 直接 `Config(value=candidate)`，`common/models/config.py` 无加密层（`SANDBOX_ENDPOINT` 注释里的 "token ciphertext" 是调用方自理），明文私钥违反 C6。轮换 = 管理端点替换 + 旧密钥保留一个 grace 期（解密侧双钥尝试，旧密文到期删除）。
+
+**企微组织同步调度（AC-45）**：`org_sync` 的 pull→reconcile 管线**已实现但无调用方**——`OrgReconcileService.reconcile_config` 既无端点也无 beat 任务（§8 坑 15）。本 feature 的周期同步不指望它自动运行：注册 beat 任务 `gateway_wecom_org_sync`（沿用 `core/config/settings.py:197` 的 `beat_schedule` 装配模式），对每个启用的 `wecom_qr` / `wecom_web` provider 调 `WeComProvider.fetch_departments` / `fetch_members`（`org_sync/domain/providers/wecom.py:326,364`）拉取，再走 `reconciler.py` 的两个纯函数 `reconcile_departments` / `reconcile_members`（`:93` / `:255`，入参为 remote DTO + 本地列表，返回操作清单）落地部门与成员。间隔取 provider 配置；失败重试 3 次后退避，写结构化日志与 telemetry journal，不影响其他登录方式与 DSH 本地面功能。
+
+**企微网页内嵌落地（AC-48）**：`wecom_web` 的 `redirectWebUri` 可携带应用标识；回调成功后 302 到该内嵌地址，标识缺失或配置缺失时回落 `gateway.home_url`。同源校验与 `return_to` 同一套逻辑。
 
 **依赖新增**：`ldap3`（pyproject 新增，需过依赖许可评审，参照 `src/backend/AGENTS.md` 依赖许可约定）。企微 OAuth 的 userinfo（`/cgi-bin/user/getuserinfo`）复用 `org_sync/domain/providers/wecom.py` 的 token 缓存，不新造 HTTP 客户端。
 
@@ -252,9 +264,11 @@ common/errcode/gateway.py          # 26600–26699
   - 输入侧：`/api/v1/dsh/chat/completions`（`dsh/api/endpoints/models.py:95`）入口调 `evaluate` 等价判定；
   - 输出侧：流式响应包 `StreamContentSafetyScanner`（business_type 传 `DSH_CHAT`），增量 feed + finish；
   - 命中语义与 workstation 完全一致：`auto_reply` 伪装回答 + SSE 事件，**不返回 4xx**（决策 3 契约）。
-- **管理面**：`/api/v1/gateway/sensitive/dsh/settings|capabilities|preview|events|events/{id}`（兼容挂 `/api/sensitive/dsh/*`）。存储 = `sensitive_word_policy` 表的 `dsh_chat` 行（`tenant + business_type + scope` 唯一键已存在，`:64`），**不建第二张策略表**。前端契约（`platform/src/types/dshContentSafety.ts` 的 `DshSensitivePolicy`：enabled / input_enabled / output_enabled / word_source / extra_words / block_message）与 `SensitiveWordPolicyPayload`（enabled / words_types / custom_words / auto_reply）做适配层映射：`input_enabled`/`output_enabled` 落 `extra_config` JSON；`word_source` ↔ `words_types`；`extra_words` ↔ `custom_words`；`block_message` ↔ `auto_reply`。
+- **管理面**：`/api/v1/gateway/sensitive/dsh/settings|capabilities|preview|events|events/{id}`（兼容挂 `/api/sensitive/dsh/*`）。存储 = `sensitive_word_policy` 表的 `dsh_chat` 行（`tenant + business_type + scope` 唯一键已存在，`:64`），**不建第二张策略表**。前端契约（`platform/src/types/dshContentSafety.ts` 的 `DshSensitivePolicy`：enabled / input_enabled / output_enabled / word_source / extra_words / block_message）与 `SensitiveWordPolicyPayload`（enabled / words_types / custom_words / auto_reply）做适配层映射：`input_enabled`/`output_enabled` 落 `extra_config` JSON；`word_source` ↔ `words_types`；`extra_words` ↔ `custom_words`；`block_message` ↔ `auto_reply`。管理面裁决经 `PermissionService`（C4）复用平台租户管理员判定（内部走 OpenFGA），不采信 DSH profile 身份、不建第二套权限模型。
 - **旧资源级端点** `/api/sensitive/saveWords|wordsDetail`（前端 `pro.ts:9,24` 仍在调）：v1 以兼容路由承接，底层改写为按 scope 粒度写 `sensitive_word_policy`（resource scope 需要扩 `scope_type` 枚举——列为 §9 后续，本期先做 tenant scope 承接并返回明确"已迁移"提示）。
-- **拦截记录**：所有 face 的命中（含已接入的 workstation / channel / knowledge，在各自命中点补一行）统一写 `gateway_block_record`（§5.7），查询面 `/api/v1/gateway/block-records`（租户管理员）。保留期 90 天，Celery beat 清理任务仿 `worker/knowledge/knowledge_chat_history_retention.py:17`。
+- **拦截记录**：所有 face 的命中（含已接入的 workstation / channel / knowledge / 开放 API 任务模式，在各自命中点补一行）统一写 `gateway_block_record`（§5.7），查询面 `/api/v1/gateway/block-records`（租户管理员）。保留期 90 天，Celery beat 清理任务仿 `worker/knowledge/knowledge_chat_history_retention.py:17`（**批量删除前必须恢复租户 ContextVar**，tasks T027）。
+- **开放 API 模型协议面**（`open_api/api/endpoints/model_gateway.py:48` `/chat/completions`，Java gateway `filter-url` 的 `api/v2/assistant/chat` 对位面）：**本期补齐**，语义为**抛错误**（沿用该面既有错误语义，与开放 API 任务模式一致），不用伪装回答——API 客户端按错误码处理，伪装回答会让客户端把阻断当成模型输出（AC-43 / AC-44）。
+- **语义分界（不互换）**：人类对话面（workstation / channel / DSH）命中 = 伪装回答；API 面（开放 API 任务模式、开放 API 模型协议、知识库文件解析 `/api/v1/knowledge/process`）命中 = 错误拒绝。已接入面零改动，判定结果 / 话术 / 事件 / 错误语义一律不变（AC-24）。
 
 ### 5.5 流量控制子系统
 
@@ -266,7 +280,7 @@ common/errcode/gateway.py          # 26600–26699
 ```
 要点：`now_ms` 由应用传入（禁 `redis TIME`，多节点时钟漂移会让桶速率不一致）；单 key，Cluster 安全；拒绝时中间件按面返回（v1：200 + 26601；v2：真 429）。
 
-**规则解析**（`gateway_rate_rule`）：`scope_type ∈ {global, department, user_group, user}` × `resource_type ∈ {assistant, skill, workflow, path}` × `resource_id`（空 = 该类全量）。中间件解析顺序：user → user_group → department → global，取最具体命中；无命中用 `GatewaySettings.rate_limit.default_qps`（默认 10，对齐 Java gateway 兜底值）。规则缓存进程内 30s + Redis Pub/Sub `delete_group` 频道联动失效（该频道已存在，`user_group_service.py:44`——规则与用户组同生命周期，天然复用）。
+**规则解析**（`gateway_rate_rule`）：`scope_type ∈ {global, department, user_group, user}` × `resource_type ∈ {assistant, skill, workflow, path}` × `resource_id`（空 = 该类全量）。中间件解析顺序：user → user_group → department → global，取最具体命中；无命中用 `GatewaySettings.rate_limit.default_qps`（默认 10，对齐 Java gateway 兜底值）。规则缓存进程内 30s + Redis Pub/Sub `delete_group` 频道联动失效（该频道已存在，`user_group_service.py:44`——规则与用户组同生命周期，天然复用）。规则管理面（CRUD）的权限判定同样经 `PermissionService`（C4，平台管理员），不新增第二套权限模型。
 
 **WS 在线计数**（`infrastructure/lua/online_counter.lua`）：建连前 `check_and_incr`（超限返回 close 4029）；断连 `decr` 按 `gw_online_session:{session_id}` 存的 key 精确回收。计数 key = `gw_online:{tenant}:{dept}|{tenant}:{group+resource}` 两级（仿 Java gateway 的 GROUP_ONLINE / FLOW_ONLINE）。
 
@@ -274,13 +288,14 @@ common/errcode/gateway.py          # 26600–26699
 
 `license_gate.py` 纯函数裁决，输入 = `license_info` 快照（进程内缓存 60s，来源 `LicenseInfoRepository`）：
 ```
-face ∈ 商业面集合（/api/v1/gateway/**、/api/v1/dsh/**、sensitive-word-policies、commercial-licenses）
+face ∈ 商业面集合（SSO 登录入口 `/api/v1/gateway/oauth2/**`、DSH 敏感词策略管理 `/api/v1/gateway/sensitive/**`、限流规则管理 `/api/v1/gateway/rate-rules`、拦截记录查询 `/api/v1/gateway/block-records`）
   ∧ (gateway license 缺失 ∨ 过期)  → 26603（v1 信封）/ 403（v2）
 其余面 → 放行（OSS 核心可用，决策 6）
 ```
+**`/api/v1/dsh/**` 明确排除在商业面集合之外**（2026-11-10 用户裁决）：F111 已确认 spec AC-03 规定 DSH 的模型鉴权 / 权限 / 额度 / 计量不得恢复 License 或席位准入，且 INV-37 要求开源完整功能不以许可证为前提。DSH 本地面能力在任何授权状态下行为一致。**授权状态查询 `/api/v1/gateway/license/*` 同样排除**：授权过期时前端 License 横幅仍须展示真实状态（AC-35），查询端点不能被自己的门关掉。SSO 登录入口纳入授权门为 2026-11-10 用户裁决，已同步修订 spec AC-02/33/34/47（取代 spec 初版「仅两个管理面」的口径）。
 商业面集合来自 `GatewaySettings.license_faces` 配置（可灰度收紧）。license 数据写入：自研网关自己同步 ETL（复用 `etl_sync.sync_etl_license`，`source='gateway'` 行），**不经前端上报**；`POST /api/v1/commercial-licenses/gateway` 保留给双跑期的 Java gateway 注入（`commercial_license/api/router.py:32`，前端 `reportGatewayLicense` 无感）。
 
-### 5.7 数据模型（新表，全部 dialect_helpers + 租户列 + logic_delete）
+### 5.7 数据模型（新表，全部 dialect_helpers + 租户列；`gateway_block_record` 为追加型表，不设 logic_delete / update_time）
 
 ```sql
 -- 1. OAuth Provider 配置（决策 2）
@@ -314,7 +329,7 @@ gateway_block_record(
   id             PK (bigint)
   tenant_id      int
   user_id        int
-  face           varchar(32)   -- workstation_chat | dsh_chat | channel_article | knowledge_file | open_api_chat
+  face           varchar(32)   -- workstation_chat | dsh_chat | channel_article | knowledge_file | open_api_chat | open_api_model
   stage          varchar(16)   -- input | output
   resource_type  varchar(32)
   resource_id    varchar(64)
@@ -326,7 +341,11 @@ gateway_block_record(
   索引 (tenant_id, face, create_time) / (tenant_id, user_id, create_time)
 )
 ```
-**归属登记**：三表 Owner = 本 feature，需在 `features/v3.0.0/release-contract.md` 表 1 追加行（SDD 流程要求，spec 评审时一并做）。
+**归属登记**：三表 Owner = 本 feature，需在 `features/v3.0.0/release-contract.md` 表 1 追加行（SDD 流程要求，tasks T007）。
+
+**租户过滤登记（C3，漏一次 = 三张新表跨租户可见）**：`bisheng/gateway/domain/models/` 下三个模型模块必须显式加入 `core/database/tenant_filter.py:42` 的 `_TENANT_AWARE_MODEL_MODULES` 元组。该清单是**显式 import 白名单**：不在清单里的模型即使带了 `tenant_id`，也会静默跳过 `before_flush` 自动填充与 `do_orm_execute` 过滤——源码注释原话即这正是 v2.5 knowledgefile / flowversion / roleaccess / userrole 把子租户资源写到 root 的成因。
+
+本 feature 同时补登记存量缺口 `bisheng.sensitive_word.domain.models`（`docs/architecture/12-multi-tenant.md:226` 已记载该表不在清单内）：DSH 策略行的租户归属目前依赖偶然 import，若网关侧先建行、之后某次重构切断 import 链，DSH 策略会静默写到 root 租户。
 
 ### 5.8 错误码与信封契约（`common/errcode/gateway.py`，26600–26699）
 
@@ -349,10 +368,11 @@ gateway_block_record(
 gateway:
   enabled: false               # 总开关；false 时中间件与路由均不注册
   license_gate: true           # 商业面 fail-closed（K4）
-  license_faces:               # 受 license 门约束的前缀
-    - /api/v1/gateway/
-    - /api/v1/dsh/
-    - /api/v1/sensitive-word-policies
+  license_faces:               # 受 license 门约束的前缀（不含 /api/v1/dsh/** 与授权状态查询，见决策 6）
+    - /api/v1/gateway/oauth2/       # SSO/OAuth 登录入口（2026-11-10 用户裁决纳入）
+    - /api/v1/gateway/sensitive/     # DSH 敏感词策略管理
+    - /api/v1/gateway/rate-rules     # 限流规则管理
+    - /api/v1/gateway/block-records  # 拦截记录查询
   filter_url: []               # 限流生效路径模式（沿用 Java gateway bisheng.filter-url 语义）
   home_url: http://host:port   # SSO 回调落地页
   rate_limit:
@@ -388,7 +408,7 @@ gateway:
 | 0 前置重构 | HMAC 公式收敛到 `common/utils/hmac_signature.py`（决策 7）；`CustomMiddleware` stash subject；加 `dsh_chat` 枚举 | 纯重构，行为等价 |
 | 1 只读面 | license 聚合后端自持；拦截记录表 + 查询面 | 关 `gateway.enabled` |
 | 2 内容安全 | DSH 聊天接入；`/api/sensitive/dsh/*` 管理面后端承接 | 停 DSH face 的策略行 |
-| 3 SSO | Provider CRUD + authorize/callback/ldap/getkey；登录页切后端 | 前端端点回退 / 停 provider |
+| 3 SSO | Provider CRUD + authorize/callback/ldap/getkey；登录页切后端；企微组织同步 beat（AC-45） | 前端端点回退 / 停 provider / 摘除 beat 条目 |
 | 4 流量控制 | QPS + 在线计数中间件；规则管理面 | `rate_limit.enabled=false` / `filter_url` 置空 |
 | 5 关停 | 停 Java gateway 进程，nginx/vite target 直连后端；`route_ownership` 全量接管 | 重启 Java gateway + target 回切（数据无依赖，随时可逆） |
 
@@ -406,6 +426,7 @@ gateway:
 | `/api/oauth2/*`、`/api/group/*`、`/api/sensitive/*`、`/api/getkey`、`/api/resource/groupFlows` | 兼容路由（仅 `gateway.enabled`） | 存量前端调用（`pro.ts`、`dshContentSafety.ts`） |
 | `GatewayMiddleware` | ASGI 中间件 | main.py 装配 |
 | `SensitiveWordPolicyService`（新增 dsh_chat 类型） | 内部 Python API | DSH 聊天链路 |
+| `gateway_block_record.face/stage/matched_words` 语义，与 `DshSensitivePolicy ↔ SensitiveWordPolicyPayload` 字段映射（`input_enabled`→`extra_config`、`word_source`→`words_types`、`extra_words`→`custom_words`、`block_message`→`auto_reply`） | 数据格式（JSON） | 拦截记录查询页、DSH 内容安全设置页 |
 
 ### 6.2 我依赖别人的（Incoming）
 
@@ -417,6 +438,8 @@ gateway:
 | `sensitive_word_policy` 唯一键与缓存失效（`clear_cache`） | 数据契约 | 绕过 service 直改表会导致 AC 自动机缓存陈旧 |
 | `delete_group` Redis 频道 | 隐式数据契约 | user_group 模块改频道名 → 限流规则缓存失效失灵 |
 | `department.concurrent_session_limit` 字段 | 数据契约 | department 模块改字段语义 → 在线阈值失真 |
+| `sensitive_word_policy` 表的租户过滤（该模块不在 `_TENANT_AWARE_MODEL_MODULES` 清单内） | 数据契约 | 目前靠偶然 import 获得租户自动填充；后端重构切断 import 链 → DSH 策略静默写 root 租户（§5.7 补登记） |
+| 第三方 IdP 的 token / userinfo 响应结构（由 `userNameJsonPath` 等配置适配） | 第三方服务契约 | IdP 改版改字段名或改错误信封 → 映射静默取到空用户名或报 26606；适配层必须对缺失字段显式报错 |
 | `ldap3` 新依赖 | 系统依赖 | 许可评审 + 镜像体积 |
 
 ---
@@ -449,6 +472,7 @@ gateway:
 | 12 | SSO 端点全在 `TENANT_CHECK_EXEMPT_PATHS`（`http_middleware.py:34-41`）豁免租户检查，service 内部自行 `bypass_tenant_filter` + root 租户 | 新回调端点忘记登记 → 登录时报 NoTenantContextError | 新路径按同一模式登记 |
 | 13 | 平台登录没有独立 refresh token（`user/api/user.py:135` 是 legacy：access 兼 refresh） | 以为能像 Java gateway 一样写 refresh_token_cookie | 登录态续期沿用平台现状；如需刷新 = 后续项 |
 | 14 | alembic 文件名前缀**不表示拓扑顺序**；`down_revision` 必须取 `alembic heads` 当日输出（现 head `f114_app_authorization`） | 迁移链分叉，升级炸 | `core/database/alembic/AGENTS.md` |
+| 15 | `org_sync` 的 pull→reconcile 主流程 `OrgReconcileService.reconcile_config` **没有任何调用方**（无端点、无 beat 任务） | 以为"配了 org_sync 就会自动同步"，上线后组织树从不更新 | §5.3：周期同步自己注册 beat + 调 `reconciler.py` 纯函数 |
 
 ---
 
@@ -469,3 +493,4 @@ gateway:
 | 日期 | 改动 | 触发原因 |
 |---|---|---|
 | 2026-11-10 | 初版：8 项核心决策、能力盘点矩阵、目标形态、数据模型、灰度路径 | 用户提出"基于当前代码库自研扩充网关能力"，先沉淀设计再进 SDD spec 评审 |
+| 2026-11-10 | design 评审后修订：RSA 私钥改 Fernet 密文（C6）；新表与 `sensitive_word` 模型补租户过滤登记（C3）；SSO 登录入口纳入 License 授权门并与 spec AC-02/33/34/47 对齐；补企微组织同步调度（AC-45）与网页内嵌落地（AC-48）设计；决策 5 补备选方案、决策 4/5/7/8 补"何时该重新考虑"；§6 补依赖风险点与新端点数据格式；§5.7 修正 logic_delete 声明；§8 补坑 15 | `/sdd-review design` 报 3 high（C6 / C3 / 与 spec 矛盾）+ 12 medium/low；用户裁决：Fernet 密文、补齐登记、SSO 纳入授权门 |
