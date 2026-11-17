@@ -20,6 +20,7 @@ from bisheng.common.services.config_service import settings
 from bisheng.core.context import close_app_context, initialize_app_context
 from bisheng.core.logger import set_logger_config
 from bisheng.dsh.work_mcp import create_work_mcp_runtime
+from bisheng.gateway.infrastructure.middleware import install_gateway
 from bisheng.open_api.api.exception_handlers import register_open_api_exception_handlers
 from bisheng.open_api.api.middleware import OpenApiAuditMiddleware
 from bisheng.open_api.api.openapi_schema import install_open_api_schema
@@ -248,6 +249,12 @@ def create_app():
     app.add_middleware(AdminScopeMiddleware)
     app.add_middleware(OpenMcpDispatchMiddleware, mcp_app=app.state.open_mcp_runtime.app)
     app.add_middleware(OpenApiAuditMiddleware)
+    # F120 native gateway: must be added on the line *before* CustomMiddleware.
+    # Starlette middleware is LIFO, so this puts the gateway inside
+    # CustomMiddleware — the JWT-decoded ``current_tenant_id`` is therefore
+    # already set when the gateway runs. When ``gateway.enabled`` is false this
+    # is a no-op and the request chain is untouched.
+    install_gateway(app, settings.gateway)
     app.add_middleware(CustomMiddleware)
     app.add_middleware(WebSocketLoggingMiddleware)
 

@@ -38,6 +38,7 @@ from bisheng.dsh_market.api.router import router as dsh_market_router
 from bisheng.evaluation.api.router import router as evaluation_router
 from bisheng.finetune.api.finetune import router as finetune_router
 from bisheng.finetune.api.server import router as server_router
+from bisheng.gateway.api.router import router as gateway_router
 from bisheng.knowledge.api.router import (
     knowledge_router,
     knowledge_space_router,
@@ -81,6 +82,9 @@ router = APIRouter(
 )
 router.include_router(dsh_market_router)
 router.include_router(dsh_router)
+# F120: /api/v1/gateway/**。mount 在 /api/v1 下，与 gateway 中间件守卫的
+# `STATUS_FACE`（"/api/v1/gateway/license/"）自然对齐。
+router.include_router(gateway_router)
 router.include_router(chat_router)
 router.include_router(endpoints_router)
 router.include_router(knowledge_router)
