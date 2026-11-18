@@ -112,8 +112,8 @@
 
 | 状态 | ID/类型 | 文件与自包含任务 | 依赖/配对 |
 | --- | --- | --- | --- |
-| [ ] | T017 测试/Domain | `BT/test_dsh_chat_input_safety.py`：命中→返回 auto_reply 形态的正常回答 + SSE 安全事件、非 4xx；未命中→原文透传；策略关闭→透传；无有效词→透传。覆盖 AC: AC-15, AC-22 | T005；T018 |
-| [ ] | T018 Domain | `BE/dsh/api/endpoints/models.py`（chat/completions 入口）+ `BE/dsh/domain/services/` 输入判定：调 `SensitiveWordPolicyService`（business_type=`dsh_chat`），不新建匹配逻辑；保持 DSH 凭证/额度/审计语义。覆盖 AC: AC-15 | T017 |
+| [x] | T017 测试/Domain | `BT/test_dsh_chat_input_safety.py`：命中→返回 auto_reply 形态的正常回答 + SSE 安全事件、非 4xx；未命中→原文透传；策略关闭→透传；无有效词→透传。覆盖 AC: AC-15, AC-22 | T005；T018 |
+| [x] | T018 Domain | `BE/dsh/api/endpoints/models.py`（chat/completions 入口）+ `BE/dsh/domain/services/` 输入判定：调 `SensitiveWordPolicyService`（business_type=`dsh_chat`），不新建匹配逻辑；保持 DSH 凭证/额度/审计语义。覆盖 AC: AC-15 | T017 |
 | [ ] | T019 测试/Domain | `BT/test_dsh_chat_output_safety.py`：流式命中跨分片/UTF-8/转义序列在完整词交付前阻断；保留已交付前缀；事件顺序不变；非流式同样覆盖。覆盖 AC: AC-16 | T018；T020 |
 | [ ] | T020 Domain | `BE/dsh/domain/services/` 流式输出：包 `StreamContentSafetyScanner`（DSH_CHAT），增量 feed + finish；不改协议事件结构。覆盖 AC: AC-16 | T019 |
 | [ ] | T021 测试/Domain | `BT/test_dsh_safety_policy_api.py`：DSH 策略 ↔ `SensitiveWordPolicyPayload` 映射 round-trip（input/output_enabled→extra_config、word_source↔words_types、extra_words↔custom_words、block_message↔auto_reply）；假启用拒绝（26608）；并发保存冲突拒绝；权限三分（无权限/租户管理员/超管指定租户）；生效时延 ≤5s（clear_cache）。覆盖 AC: AC-17, AC-18, AC-19, AC-20, AC-21 | T005；T022 |

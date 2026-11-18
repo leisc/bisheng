@@ -364,6 +364,40 @@ class SensitiveWordPolicyService:
             return False
 
     @classmethod
+    def is_dsh_content_safety_active(cls, tenant_id: int) -> bool:
+        """DSH 面的部署级开关。
+
+        与 workstation 同源（AC-22）：未启用 Pro 能力时保持 DSH 透传行为，
+        不出现「看似开启实际不检查」。
+        """
+        if not cls._is_bisheng_pro():
+            return False
+        try:
+            return cls.is_effective(tenant_id, SensitiveWordBusinessType.DSH_CHAT)
+        except Exception:
+            logger.exception("dsh content safety is_effective failed tenant_id={}", tenant_id)
+            return False
+
+    @classmethod
+    def evaluate_dsh_user_text(cls, tenant_id: int, text: str) -> SensitiveWordCheckResult | None:
+        """DSH 输入判定。命中返回结果，未命中/未启用返回 None。
+
+        放在 Service 上而不是 DSH 模块里：`workstation/content_safety.py` 的注释
+        说明了同样的理由——让 linsight 之类的调用方不必 import workstation。
+        DSH 也不该为了判定去 import 别的业务面。
+        """
+        if not cls.is_dsh_content_safety_active(tenant_id):
+            return None
+        result = cls.check_text(
+            tenant_id=tenant_id,
+            business_type=SensitiveWordBusinessType.DSH_CHAT,
+            text=text or "",
+        )
+        if result.enabled and result.hits:
+            return result
+        return None
+
+    @classmethod
     def evaluate_workbench_user_text(cls, tenant_id: int, text: str) -> SensitiveWordCheckResult | None:
         if not cls.is_workbench_content_safety_active(tenant_id):
             return None

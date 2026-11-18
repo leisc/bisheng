@@ -4,10 +4,12 @@ import asyncio
 import json
 from datetime import UTC, datetime
 from typing import Annotated
+from uuid import uuid4
 from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Depends, Query, Request
 from fastapi.responses import StreamingResponse
+from loguru import logger
 from pydantic import ValidationError
 
 from bisheng.common.errcode.dsh import DshInvalidRequestError, DshModelNotAllowedError, DshQuotaUnavailableError
@@ -18,9 +20,16 @@ from bisheng.dsh.domain.schemas.conversation import AUDIT_CONTEXT_KEY, Conversat
 from bisheng.dsh.domain.schemas.model_audit_context import parse_audit_context
 from bisheng.dsh.domain.schemas.responses import MAX_REQUEST_BYTES, DshResponsesRequest
 from bisheng.dsh.domain.services.access import DshPrincipal, principal_scope
+from bisheng.dsh.domain.services.chat_input_safety import (
+    blocked_chat_completion,
+    blocked_responses_completion,
+    iter_blocked_chat_stream,
+    iter_blocked_responses_stream,
+)
 from bisheng.dsh.domain.services.model import PreparedStream
 from bisheng.dsh.domain.services.usage_projection import apply_current_policy_limits
 from bisheng.dsh.runtime import get_model_runtime, read_persisted_usage, read_policy
+from bisheng.sensitive_word.domain.services.sensitive_word_policy_service import SensitiveWordPolicyService
 
 router = APIRouter(route_class=DshRoute)
 
@@ -78,8 +87,56 @@ async def models(principal: DshPrincipal = Depends(desktop_principal), runtime: 
     return await service.model.list_models(principal)
 
 
+def _last_user_text(body) -> str:
+    """取最后一条 user 消息的文本。图片/加密/审计元数据不扫（F111 AC-20）。"""
+    messages = getattr(body, "messages", None)
+    if messages is None:
+        # Responses 面的 input 可能是字符串或消息列表。
+        text = getattr(body, "input", None)
+        return text if isinstance(text, str) else ""
+    for message in reversed(messages):
+        content = getattr(message, "content", None)
+        if isinstance(content, str):
+            return content
+        if isinstance(content, list):
+            # 多模态 content parts：只取 text 类。
+            parts = [p.get("text", "") for p in content if isinstance(p, dict) and p.get("type") == "text"]
+            if parts:
+                return "".join(parts)
+    return ""
+
+
+def _respond_input_blocked(request, body, auto_reply: str):
+    """输入命中：返回与普通回答同构的阻断话术，不返回 4xx（AC-15）。
+
+    在 `service.complete` 之前短路，因此不发起模型执行与工具调用。
+    """
+    request_id = getattr(request.state, "request_id", None) or str(uuid4())
+    model = getattr(body, "model", "") or ""
+    native = isinstance(body, DshResponsesRequest)
+    if body.stream:
+        stream = iter_blocked_responses_stream if native else iter_blocked_chat_stream
+        return DshStreamingResponse(
+            stream(model=model, auto_reply=auto_reply, request_id=request_id)
+        )
+    payload = blocked_responses_completion if native else blocked_chat_completion
+    return payload(model=model, auto_reply=auto_reply, request_id=request_id)
+
+
 async def _complete(request, model, principal, runtime):
     body, hint, audit_context = await read_model_request(request, model)
+    # 输入判定在 `service.complete` 之前：命中即短路，工具调用与后续模型执行
+    # 都不继续（AC-15）。tenant_id 取自已验证的 DSH 凭据（F111 AC-13）。
+    with principal_scope(principal):
+        blocked = SensitiveWordPolicyService.evaluate_dsh_user_text(int(principal.tenant_id), _last_user_text(body))
+    if blocked:
+        logger.warning(
+            "dsh content safety hit tenant_id={} user_id={} mode=input request_id={}",
+            int(principal.tenant_id),
+            int(principal.user_id),
+            getattr(request.state, "request_id", None),
+        )
+        return _respond_input_blocked(request, body, blocked.auto_reply or "")
     service = await get_model_runtime(runtime)
     result = await service.complete(
         principal,
