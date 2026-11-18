@@ -114,8 +114,8 @@
 | --- | --- | --- | --- |
 | [x] | T017 测试/Domain | `BT/test_dsh_chat_input_safety.py`：命中→返回 auto_reply 形态的正常回答 + SSE 安全事件、非 4xx；未命中→原文透传；策略关闭→透传；无有效词→透传。覆盖 AC: AC-15, AC-22 | T005；T018 |
 | [x] | T018 Domain | `BE/dsh/api/endpoints/models.py`（chat/completions 入口）+ `BE/dsh/domain/services/` 输入判定：调 `SensitiveWordPolicyService`（business_type=`dsh_chat`），不新建匹配逻辑；保持 DSH 凭证/额度/审计语义。覆盖 AC: AC-15 | T017 |
-| [ ] | T019 测试/Domain | `BT/test_dsh_chat_output_safety.py`：流式命中跨分片/UTF-8/转义序列在完整词交付前阻断；保留已交付前缀；事件顺序不变；非流式同样覆盖。覆盖 AC: AC-16 | T018；T020 |
-| [ ] | T020 Domain | `BE/dsh/domain/services/` 流式输出：包 `StreamContentSafetyScanner`（DSH_CHAT），增量 feed + finish；不改协议事件结构。覆盖 AC: AC-16 | T019 |
+| [x] | T019 测试/Domain | `BT/test_dsh_chat_output_safety.py`：流式命中跨分片/UTF-8/转义序列在完整词交付前阻断；保留已交付前缀；事件顺序不变；非流式同样覆盖。覆盖 AC: AC-16 | T018；T020 |
+| [x] | T020 Domain | `BE/dsh/domain/services/` 流式输出：包 `StreamContentSafetyScanner`（DSH_CHAT），增量 feed + finish；不改协议事件结构。覆盖 AC: AC-16 | T019 |
 | [ ] | T021 测试/Domain | `BT/test_dsh_safety_policy_api.py`：DSH 策略 ↔ `SensitiveWordPolicyPayload` 映射 round-trip（input/output_enabled→extra_config、word_source↔words_types、extra_words↔custom_words、block_message↔auto_reply）；假启用拒绝（26608）；并发保存冲突拒绝；权限三分（无权限/租户管理员/超管指定租户）；生效时延 ≤5s（clear_cache）。覆盖 AC: AC-17, AC-18, AC-19, AC-20, AC-21 | T005；T022 |
 | [ ] | T022 Domain/API | `BE/gateway/api/endpoints/dsh_content_safety.py`：settings/capabilities/preview 三端点 + 策略映射适配层；只走 `SensitiveWordPolicyService` 读写（坑 #10）；权限判定经 `PermissionService`（C4）复用平台租户管理员判定（内部走 OpenFGA），不采信 DSH profile 身份、不建第二套权限模型（design §5.4）。覆盖 AC: AC-17, AC-18, AC-19, AC-21 | T021 |
 | [ ] | T023 测试/Domain | `BT/test_block_record.py`：命中写入字段完整（face/stage/词/预览截断/话术/request_id）；分页与租户隔离；跨租户不可见；90 天边界清理判定。覆盖 AC: AC-23 | T007；T024 |

@@ -25,6 +25,13 @@ from bisheng.dsh.domain.schemas.contracts import DshTokenUsage
 from bisheng.dsh.domain.schemas.responses import DshResponsesRequest
 from bisheng.dsh.domain.schemas.usage import UsageEvent
 from bisheng.dsh.domain.services.access import DshPrincipal, principal_scope
+from bisheng.dsh.domain.services.chat_output_safety import (
+    blocked_chat_delta,
+    blocked_responses_frames,
+    guard_chat_completion,
+    guard_responses_completion,
+    make_output_guard,
+)
 from bisheng.dsh.domain.services.model_display import model_display_name
 from bisheng.dsh.infrastructure.chat_adapter import DshChatAdapter
 from bisheng.dsh.infrastructure.model_errors import model_failure_code
@@ -210,15 +217,19 @@ class DshModelService:
                 raise self._public_error(error) from error
             await self._settle(event, execution, getattr(execution, "status", "SUCCEEDED"))
             if native:
-                return result
-            return {
-                "id": "chatcmpl-" + event.request_id,
-                "object": "chat.completion",
-                "created": int(started.timestamp()),
-                "model": request.model,
-                "choices": [{"index": 0, **result}],
-                "usage": usage_response(execution.usage),
-            }
+                # 输出安全（AC-16）：非流式同样覆盖，命中则替换 output 文本。
+                return await guard_responses_completion(result, tenant_id=int(principal.tenant_id))
+            return await guard_chat_completion(
+                {
+                    "id": "chatcmpl-" + event.request_id,
+                    "object": "chat.completion",
+                    "created": int(started.timestamp()),
+                    "model": request.model,
+                    "choices": [{"index": 0, **result}],
+                    "usage": usage_response(execution.usage),
+                },
+                tenant_id=int(principal.tenant_id),
+            )
 
     @staticmethod
     def _public_error(error):
@@ -287,7 +298,7 @@ class DshModelService:
 
     async def _stream(self, principal, request, execution, event):
         if isinstance(request, DshResponsesRequest):
-            source = self._stream_responses(execution, event)
+            source = self._stream_responses(execution, event, principal, request)
             try:
                 async for frame in source:
                     yield frame
@@ -304,11 +315,35 @@ class DshModelService:
         }
         first = True
         try:
+            # 输出安全守卫（AC-16）：命中即停止交付，但继续读上游让用量正常收敛——
+            # 模型已经生成的 token 照实记账，不因为拦截就变成 usage_unknown。
+            guard = make_output_guard(int(principal.tenant_id))
+            blocked = None
             async for delta in source:
-                if first:
+                if blocked is not None:
+                    continue
+                if guard is not None:
+                    reply = guard.feed(delta.get("content") if isinstance(delta, dict) else None)
+                    if reply is not None:
+                        blocked = reply
+                        yield sse(
+                            {
+                                **common,
+                                "choices": [{"index": 0, "delta": blocked_chat_delta(reply), "finish_reason": None}],
+                            }
+                        )
+                        continue
+                if first and "role" not in delta:
                     delta = {"role": "assistant", **delta}
                     first = False
                 yield sse({**common, "choices": [{"index": 0, "delta": delta, "finish_reason": None}]})
+            if blocked is None and guard is not None:
+                reply = guard.finish()
+                if reply is not None:
+                    blocked = reply
+                    yield sse(
+                        {**common, "choices": [{"index": 0, "delta": blocked_chat_delta(reply), "finish_reason": None}]}
+                    )
         except (asyncio.CancelledError, GeneratorExit):
             await source.aclose()
             await asyncio.shield(self._settle(event, execution, "CANCELLED", "cancelled"))
@@ -319,7 +354,9 @@ class DshModelService:
                 public = self._public_error(error)
             except DshUsageUnavailableError as settlement_error:
                 public = settlement_error
-            yield "event: error\n" + sse(error_response(public, event.request_id))
+            if blocked is None:
+                # 已交付过完整回答后再发 error 帧会破坏协议；此时只记账不外发。
+                yield "event: error\n" + sse(error_response(public, event.request_id))
             return
         finally:
             await source.aclose()
@@ -333,14 +370,38 @@ class DshModelService:
             yield sse({**common, "choices": [], "usage": usage_response(execution.usage)})
         yield "data: [DONE]\n\n"
 
-    async def _stream_responses(self, execution, event):
+    async def _stream_responses(self, execution, event, principal, request):
+        """Responses 面流式输出。
+
+        输出安全守卫（AC-16）在帧拼接之前判定：命中后不再转发上游事件，收尾帧
+        沿用上游自己的 response.completed 形状，不注入新事件类型。
+        """
         source = execution.stream()
+        terminal = None
+        guard = make_output_guard(int(principal.tenant_id))
+        blocked = None
         try:
             async for item in source:
                 if item["type"] in {"response.completed", "response.failed", "response.incomplete"}:
                     terminal = item
-                else:
-                    yield "event: " + item["type"] + "\n" + sse(item)
+                    continue
+                if blocked is not None:
+                    # 已命中：继续读上游让用量收敛，但不再交付（AC-16）。
+                    continue
+                if guard is not None and item.get("type") == "response.output_text.delta":
+                    reply = guard.feed(item.get("delta"))
+                    if reply is not None:
+                        blocked = reply
+                        for frame in blocked_responses_frames(reply):
+                            yield frame
+                        continue
+                yield "event: " + item["type"] + "\n" + sse(item)
+            if blocked is None and guard is not None:
+                reply = guard.finish()
+                if reply is not None:
+                    blocked = reply
+                    for frame in blocked_responses_frames(reply):
+                        yield frame
         except (asyncio.CancelledError, GeneratorExit):
             await source.aclose()
             await asyncio.shield(self._settle(event, execution, "CANCELLED", "cancelled"))
@@ -351,16 +412,21 @@ class DshModelService:
                 public = self._public_error(error)
             except DshUsageUnavailableError as settlement_error:
                 public = settlement_error
-            yield "event: error\n" + sse({"type": "error", **error_response(public, event.request_id)})
+            if blocked is None:
+                # 已交付过完整回答后再发 error 帧会破坏协议；此时只记账不外发。
+                yield "event: error\n" + sse({"type": "error", **error_response(public, event.request_id)})
             return
         finally:
             await source.aclose()
         try:
             await self._settle(event, execution, execution.status)
         except DshUsageUnavailableError as error:
-            yield "event: error\n" + sse({"type": "error", **error_response(error, event.request_id)})
+            if blocked is None:
+                yield "event: error\n" + sse({"type": "error", **error_response(error, event.request_id)})
             return
-        yield "event: " + terminal["type"] + "\n" + sse(terminal)
+        if blocked is None and terminal is not None:
+            # 命中时收尾帧由守卫给出，上游终态帧不再重复发送。
+            yield "event: " + terminal["type"] + "\n" + sse(terminal)
 
 
 class PreparedStream:

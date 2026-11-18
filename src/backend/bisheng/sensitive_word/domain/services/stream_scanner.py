@@ -18,10 +18,20 @@ class StreamContentSafetyScanner:
 
     Character count uses ``len(str)`` (Unicode code points). Thinking / tool
     text must never be fed here — callers only pass the final answer delta.
+
+    ``business_type`` selects which policy row is consulted; workbench is the
+    default so existing callers are unchanged (F120 adds ``dsh_chat``).
     """
 
-    def __init__(self, tenant_id: int) -> None:
+    def __init__(
+        self,
+        tenant_id: int,
+        business_type: SensitiveWordBusinessType = SensitiveWordBusinessType.WORKBENCH_CHAT,
+        check_interval: int = CHECK_INTERVAL,
+    ) -> None:
         self.tenant_id = tenant_id
+        self.business_type = business_type
+        self.check_interval = max(1, int(check_interval))
         self._buffer = ""
         self._last_checked = 0
         self._hit: SensitiveWordCheckResult | None = None
@@ -32,7 +42,7 @@ class StreamContentSafetyScanner:
         if not delta:
             return None
         self._buffer += str(delta)
-        if len(self._buffer) - self._last_checked < CHECK_INTERVAL:
+        if len(self._buffer) - self._last_checked < self.check_interval:
             return None
         return self._scan()
 
@@ -46,7 +56,7 @@ class StreamContentSafetyScanner:
     def _scan(self) -> SensitiveWordCheckResult | None:
         result = SensitiveWordPolicyService.check_text(
             tenant_id=self.tenant_id,
-            business_type=SensitiveWordBusinessType.WORKBENCH_CHAT,
+            business_type=self.business_type,
             text=self._buffer,
         )
         self._last_checked = len(self._buffer)

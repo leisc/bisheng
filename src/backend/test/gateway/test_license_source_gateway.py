@@ -17,7 +17,6 @@ from pathlib import Path
 
 import pytest
 from fastapi import FastAPI
-from fastapi.testclient import TestClient
 
 from bisheng.commercial_license.domain.models.license_info import LicenseInfo
 from bisheng.gateway.api.endpoints.license import get_gateway_license_status
@@ -26,6 +25,11 @@ from bisheng.gateway.api.router import router as gateway_router
 REPO_ROOT = Path(__file__).resolve().parents[3]
 
 TODAY = date(2026, 11, 17)
+# 端点是委托 Owner 重算的，Owner 读的是真实系统日期，所以「还剩几天」必须跟着
+# 真实日期走——写死数字会让这条测试每天失败一次（2026-11-18 起 -47/-48 已经
+# 对不上了）。这里用日期差表达，保住的是「委托 + 符号」这两条真不变量。
+EXPIRED_DAYS = (date(2026, 10, 1) - date.today()).days
+VALID_DAYS = (date(2027, 1, 1) - date.today()).days
 STATUS_PATH = "/api/v1/gateway/license/status"
 COMMERCIAL_PATH = "/api/v1/gateway/sensitive/policies"
 LICENSE_FACES = ("/api/v1/gateway/sensitive/",)
@@ -116,7 +120,8 @@ async def test_status_endpoint_matches_license_info_rows(session):
     item = body.data["licenses"][0]
     assert item["display_state"] == "expired", "必须用 Owner 的 compute_display_state 重算"
     assert item["expire_date"] == "2026-10-01"
-    assert item["days_remaining"] == -47
+    assert item["days_remaining"] == EXPIRED_DAYS
+    assert EXPIRED_DAYS < 0, "过期授权的剩余天数必须为负"
 
 
 async def test_status_endpoint_reports_no_licenses_when_table_is_empty(session):
@@ -133,7 +138,8 @@ async def test_status_endpoint_carries_the_gate_decision(session):
     decision = body.data["gate_decision"]
     assert decision["allowed"] is True
     assert decision["license_code"] == "etl"
-    assert decision["days_remaining"] == 45
+    assert decision["days_remaining"] == VALID_DAYS
+    assert VALID_DAYS > 0, "未过期授权的剩余天数必须为正"
 
 
 async def test_status_endpoint_gate_decision_reflects_expired_license(session):
