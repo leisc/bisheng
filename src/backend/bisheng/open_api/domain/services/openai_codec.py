@@ -68,6 +68,19 @@ def to_langchain_messages(messages: list[dict[str, Any]]) -> list[BaseMessage]:
         raise ModelFaceRequestInvalidError(exception=exc, msg=redact_secrets(str(exc))) from exc
 
 
+def answer_delta_text(chunk: Any) -> str:
+    """The final-answer text one upstream chunk carries.
+
+    Reasoning and tool-call fragments are deliberately excluded: the content
+    scanner is for what the user reads, and a reasoning trace that happens to
+    name a sensitive term is not a disclosure of it (the same rule the workbench
+    scanner documents).
+    """
+
+    message = getattr(chunk, "message", chunk)
+    return _content_text(getattr(message, "content", None)) or ""
+
+
 def _content_text(content: Any) -> str | None:
     if content is None:
         return None

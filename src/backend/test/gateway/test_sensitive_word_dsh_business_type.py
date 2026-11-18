@@ -22,6 +22,10 @@ from types import SimpleNamespace
 
 import pytest
 
+from bisheng.sensitive_word.domain.models.sensitive_word_policy import (
+    SensitiveWordPolicy,
+    SensitiveWordPolicyDao,
+)
 from bisheng.sensitive_word.domain.schemas import (
     SensitiveWordBusinessType,
     SensitiveWordPolicyResp,
@@ -30,10 +34,6 @@ from bisheng.sensitive_word.domain.schemas import (
 from bisheng.sensitive_word.domain.services.sensitive_word_policy_service import (
     DEFAULT_AUTO_REPLY,
     SensitiveWordPolicyService,
-)
-from bisheng.sensitive_word.domain.models.sensitive_word_policy import (
-    SensitiveWordPolicy,
-    SensitiveWordPolicyDao,
 )
 
 EXISTING_TYPES = [
@@ -47,13 +47,14 @@ def test_dsh_chat_value_exists_and_is_stable():
     assert SensitiveWordBusinessType.DSH_CHAT.value == "dsh_chat"
 
 
-def test_all_four_types_are_accepted_by_the_enum():
+def test_all_five_types_are_accepted_by_the_enum():
     values = {item.value for item in SensitiveWordBusinessType}
     assert {
         "knowledge_space_file_parse",
         "channel_article",
         "workbench_chat",
         "dsh_chat",
+        "open_api_chat",
     } == values
 
 

@@ -46,6 +46,16 @@ class StreamContentSafetyScanner:
             return None
         return self._scan()
 
+    def buffer(self) -> str:
+        """Everything fed so far, hit or not.
+
+        The block record stores the delivered prefix, so an operator reading a
+        refusal sees the text that triggered it rather than a fragment that
+        starts mid-word.
+        """
+
+        return self._buffer
+
     def finish(self) -> SensitiveWordCheckResult | None:
         if self._hit is not None:
             return self._hit

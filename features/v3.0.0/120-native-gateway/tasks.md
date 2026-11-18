@@ -126,8 +126,23 @@
 | [ ] | T027 Worker | `BE/worker/gateway/tasks.py` + `core/config/settings.py` beat：拦截记录 90 天保留清理（仿 `knowledge_chat_history_retention.py`），参数带 tenant_id、执行前恢复 ContextVar。覆盖 AC: AC-23 | T024 |
 | [ ] | T028 前端 | `FE/controllers/API/dshContentSafety.ts`（或等效处）：`/api/sensitive/dsh/*` 切到后端同路径兼容路由；契约字段已对齐故页面零改动；确认 `dshContentSafetyStyles` scope 仍覆盖。覆盖 AC: AC-17, AC-39<br>**手动验证**：`BISHENG_PRO=true` 起后端，打开 DSH 内容安全设置页→改策略保存→5s 内新会话生效；造一个命中词发起会话→见阻断话术与拦截记录 | T022 |
 
-| [ ] | T057 测试/Domain | `BT/test_open_api_chat_safety.py`（2026-11-10 增补）：模型协议面输入命中→调用模型前即被拒（断言未发起上游调用）、错误语义与既有开放面一致、不透传命中内容；流式输出命中→中断且保留已交付前缀、事件顺序不变；未命中→原文透传。覆盖 AC: AC-43, AC-44, AC-24 | T005, T017；T058 |
-| [ ] | T058 Domain | `BE/open_api/api/endpoints/model_gateway.py`（`/chat/completions`）输入判定 + 流式输出包 `StreamContentSafetyScanner`（business_type 传开放面枚举），命中抛该面既有错误类型；**不改为伪装回答**（API 客户端按错误码处理）；命中点补 `gateway_block_record`。覆盖 AC: AC-43, AC-44, AC-24 | T057, T024 |
+| [x] | T057 测试/Domain | `BT/test_open_api_chat_safety.py`（2026-11-10 增补）：模型协议面输入命中→调用模型前即被拒（断言未发起上游调用）、错误语义与既有开放面一致、不透传命中内容；流式输出命中→中断且保留已交付前缀、事件顺序不变；未命中→原文透传。覆盖 AC: AC-43, AC-44, AC-24 | T005, T017；T058 |
+| [x] | T058 Domain | `BE/open_api/api/endpoints/model_gateway.py`（`/chat/completions`）输入判定 + 流式输出包 `StreamContentSafetyScanner`（business_type 传开放面枚举），命中抛该面既有错误类型；**不改为伪装回答**（API 客户端按错误码处理）；命中点补 `gateway_block_record`。覆盖 AC: AC-43, AC-44, AC-24 | T057, T024 |
+
+### T057/T058 实际偏差记录
+
+| 计划 | 实际 | 为什么 |
+|---|---|---|
+| 接线写在 `BE/open_api/api/endpoints/model_gateway.py` | 写在 `BE/open_api/domain/services/model_gateway_safety.py`（新模块）+ `model_gateway_service.py` 两个调用点 | 端点本身只做协议编解码；命中判定、错误构造、留证降级是这个面共用的逻辑，放 endpoint 会让流式/非流式两条路各抄一份。`model_gateway.py` 未改动。 |
+| 输入命中「以该面既有错误语义拒绝」 | 新增 `ModelFaceContentBlockedError`（`common/errcode/model_face.py`，码 26535，`openai_type=invalid_request_error`、`openai_code=content_policy_violation`） | 既有 265 波段里没有「内容策略」这一类；复用 `invalid_request_error` 会让客户端无法把它和参数错误区分开。`content_policy_violation` 是 OpenAI 自己的内容过滤码，客户端已有的特判分支能继续生效。 |
+| 流式输出命中「中断并告知」 | SSE `error` 事件（200 头早已发出，没有状态码可设）；已交付前缀原样保留；**不发** finish_reason / usage 帧；上游抽干 | 前缀保留是 AC-44 的硬要求；finish_reason 会让客户端以为正常结束；抽干是因为调用确实发生了，provider 已计费，丢弃生成器会让用量对不上。 |
+| `StreamContentSafetyScanner(business_type=开放面枚举)` | `check_interval=1`（DSH 同值；共享默认是 100） | 间隔一大，短回答在第一次检查之前就已经交付完了，正是 AC-44 禁止的透传。代价是每个 delta 一次策略读取，且只由开启了这一面策略的租户承担——未开启时 `make_output_scanner` 返回 `None`，流逐字节不变。若日后 profiling 发现这一读是热点，正解是在扫描器内部按流解析一次策略，而不是放宽间隔。 |
+| 命中点补 `gateway_block_record` | 经 `gateway_block_record_service` 单例；best-effort，失败只记日志 | 留证不能反过来让调用方丢答案。账本 `result` 用新增的 `content_blocked`，与 `upstream_failed` 分开：命中时什么都没问过 provider，运营不该去那儿找原因。 |
+| — | `GatewayBlockRecordService` 增加模块级单例 `gateway_block_record_service` | `record_block` 是实例方法（要 writer），而 `list_blocks` 是 classmethod；进程里只有一个 writer（`main.py` 启停的那个），所以只有一个 service，与 `model_call_record_writer` 同形。原写法按未绑定方法调用会直接 TypeError。 |
+
+### 遗留（未做，见用户裁决）
+
+T021 / T022 / T026 / T028（DSH 内容安全设置面与事件查询）按用户裁决跳过，**spec AC-17~AC-21 与 AC-39 悬空**；T017~T020 已提交但不回退。
 
 ## Wave 4：流量控制（QPS + WS 在线计数）
 

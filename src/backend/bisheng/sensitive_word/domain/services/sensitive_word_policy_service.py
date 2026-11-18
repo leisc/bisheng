@@ -379,6 +379,35 @@ class SensitiveWordPolicyService:
             return False
 
     @classmethod
+    def is_open_api_content_safety_active(cls, tenant_id: int) -> bool:
+        """开放 API 模型协议面的部署级开关，与 workstation / DSH 同源（AC-22）。"""
+        if not cls._is_bisheng_pro():
+            return False
+        try:
+            return cls.is_effective(tenant_id, SensitiveWordBusinessType.OPEN_API_CHAT)
+        except Exception:
+            logger.exception("open_api content safety is_effective failed tenant_id={}", tenant_id)
+            return False
+
+    @classmethod
+    def evaluate_open_api_user_text(cls, tenant_id: int, text: str) -> SensitiveWordCheckResult | None:
+        """开放 API 模型协议面输入判定。命中返回结果，未命中/未启用返回 None。
+
+        与 DSH 的差别只在调用方拿到结果之后怎么办：这一面抛错误码，不做伪装回答
+        （AC-43）——API 客户端按错误码编程，伪装回答会被当成正常输出。
+        """
+        if not cls.is_open_api_content_safety_active(tenant_id):
+            return None
+        result = cls.check_text(
+            tenant_id=tenant_id,
+            business_type=SensitiveWordBusinessType.OPEN_API_CHAT,
+            text=text or "",
+        )
+        if result.enabled and result.hits:
+            return result
+        return None
+
+    @classmethod
     def evaluate_dsh_user_text(cls, tenant_id: int, text: str) -> SensitiveWordCheckResult | None:
         """DSH 输入判定。命中返回结果，未命中/未启用返回 None。
 

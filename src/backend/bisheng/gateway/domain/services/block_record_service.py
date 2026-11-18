@@ -238,6 +238,14 @@ class GatewayBlockRecordService:
 
 block_record_writer = GatewayBlockRecordWriter()
 
+# The singleton hit points call. ``record_block`` is an instance method because
+# it needs the writer, and there is exactly one writer in the process (the one
+# ``main.py`` starts), so there is exactly one service — same shape as
+# ``model_call_record_writer``. Tests that want to watch the queue construct
+# their own ``GatewayBlockRecordService(writer=...)`` instead of reaching for
+# this one.
+gateway_block_record_service = GatewayBlockRecordService(writer=block_record_writer)
+
 
 __all__ = [
     'MAX_PAGE_SIZE',
@@ -247,4 +255,5 @@ __all__ = [
     'GatewayBlockRecordService',
     'GatewayBlockRecordWriter',
     'block_record_writer',
+    'gateway_block_record_service',
 ]

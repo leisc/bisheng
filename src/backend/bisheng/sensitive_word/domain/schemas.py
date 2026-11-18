@@ -15,6 +15,12 @@ class SensitiveWordBusinessType(str, Enum):
     #: (tenant_id, business_type, scope_type, scope_id, logic_delete) — sharing a
     #: business_type would make one face's policy overwrite another's.
     DSH_CHAT = "dsh_chat"
+    #: F120 native gateway — the OpenAI-compatible model protocol face
+    #: (``/api/v2/model/v1/chat/completions``). Separate namespace for the same
+    #: reason as DSH_CHAT: the unique key is
+    #: (tenant_id, business_type, scope_type, scope_id, logic_delete), so sharing
+    #: a business_type would let one face's policy overwrite another's.
+    OPEN_API_CHAT = "open_api_chat"
 
 
 class SensitiveWordScopeType(str, Enum):

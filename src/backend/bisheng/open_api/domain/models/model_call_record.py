@@ -28,6 +28,10 @@ RESULT_MODEL_UNAVAILABLE = "model_unavailable"
 RESULT_LIMIT_EXCEEDED = "limit_exceeded"
 RESULT_CAPABILITY_UNDECLARED = "capability_undeclared"
 RESULT_CLIENT_DISCONNECTED = "client_disconnected"
+#: Refused by the tenant's content-safety policy before or during the call
+#: (F120 T058). Distinct from ``upstream_failed``: nothing was asked of the
+#: provider, so an operator reading the ledger should not go looking there.
+RESULT_CONTENT_BLOCKED = "content_blocked"
 
 SUBJECT_KIND_USER = "user"
 SUBJECT_KIND_APP_SELF = "app_self"
@@ -116,6 +120,7 @@ class ModelCallRecord(SQLModelSerializable, table=True):
 __all__ = [
     "RESULT_CAPABILITY_UNDECLARED",
     "RESULT_CLIENT_DISCONNECTED",
+    "RESULT_CONTENT_BLOCKED",
     "RESULT_LIMIT_EXCEEDED",
     "RESULT_MODEL_UNAVAILABLE",
     "RESULT_SUCCESS",

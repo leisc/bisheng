@@ -214,6 +214,27 @@ class ModelFaceStreamInterruptedError(ModelFaceError):
     openai_code: str = "stream_interrupted"
 
 
+class ModelFaceContentBlockedError(ModelFaceError):
+    """Content-safety refusal (F120 T058, AC-43 / AC-44).
+
+    The message carries the policy's blocked-reply wording and never the word
+    that matched: the error body is what the caller reads, and echoing the hit
+    would hand the sensitive term back to whoever sent it.
+
+    ``openai_code`` mirrors OpenAI's own content-filter refusal so a client that
+    already special-cases that code keeps working unchanged.
+    """
+
+    Code: int = 26535
+    Msg: str = "The request was refused by this tenant's content safety policy"
+    http_status: int = 400
+    openai_type: str = OPENAI_TYPE_INVALID_REQUEST
+    openai_code: str = "content_policy_violation"
+
+    def __init__(self, msg: str | None = None, **kwargs):
+        super().__init__(msg=msg or self.Msg, **kwargs)
+
+
 __all__ = [
     "OPENAI_TYPE_AUTHENTICATION",
     "OPENAI_TYPE_INVALID_REQUEST",
