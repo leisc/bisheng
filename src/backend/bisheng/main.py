@@ -20,6 +20,7 @@ from bisheng.common.services.config_service import settings
 from bisheng.core.context import close_app_context, initialize_app_context
 from bisheng.core.logger import set_logger_config
 from bisheng.dsh.work_mcp import create_work_mcp_runtime
+from bisheng.gateway.domain.services.block_record_service import block_record_writer
 from bisheng.gateway.infrastructure.middleware import install_gateway
 from bisheng.open_api.api.exception_handlers import register_open_api_exception_handlers
 from bisheng.open_api.api.middleware import OpenApiAuditMiddleware
@@ -130,6 +131,10 @@ async def lifespan(app: FastAPI):
         # write-behind. Own writer, own table — the audit page must not be drowned
         # by a face a local coding agent calls in a loop.
         model_call_record_writer.start()
+        # F120: gateway block records are written write-behind for the same
+        # reason — a hit point must not wait on a database round trip, and a
+        # full queue must drop a row rather than fail the request that hit.
+        block_record_writer.start()
         try:
             await init_default_data()
             # F035 task-mode compatibility data remains unrelated to F048 resource
@@ -177,6 +182,10 @@ async def lifespan(app: FastAPI):
         finally:
             await open_api_call_audit_service.stop()
             await model_call_record_writer.stop()
+            # Flush block records before the database goes away: a dropped row
+            # is invisible evidence, so shutdown gets the same bounded chance
+            # the hosted-app access records get.
+            await block_record_writer.stop()
             # Hosted-app access records are written fire-and-forget (F054 AC-38);
             # give the in-flight ones a bounded chance to land before the database
             # goes away, so a deploy restart is not a silent gap in an audit asset.

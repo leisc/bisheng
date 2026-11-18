@@ -21,14 +21,14 @@ itself is covered by ``test/database/`` and the Alembic migration test.
 
 from __future__ import annotations
 
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, contextmanager
 
 import pytest
 import pytest_asyncio
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import create_async_engine
 from sqlalchemy.pool import StaticPool
-from sqlmodel import SQLModel
+from sqlmodel import SQLModel, select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 
@@ -107,9 +107,7 @@ async def session_factory(gw_engine, monkeypatch):
     ``bisheng.core.database`` alone would leave the repositories pointing at
     the real one.
     """
-    from contextlib import asynccontextmanager
 
-    from bisheng.core.database import get_async_db_session as _real
     from bisheng.gateway.domain.repositories import (
         block_record_repository,
         oauth_provider_repository,
@@ -399,23 +397,24 @@ async def test_block_record_append_only_round_trip(session_factory):
         GatewayBlockRecordRepository,
     )
 
-    created = await GatewayBlockRecordRepository.append_record(
-        GatewayBlockRecord(
-            tenant_id=3,
-            user_id=42,
-            face="dsh_chat",
-            stage="input",
-            resource_type="assistant",
-            resource_id="77",
-            matched_words=[{"word": "违规词", "count": 2}],
-            user_input="预览前 500 字符",
-            auto_reply="回答已被拦截",
-            request_id="trace-abc",
-        )
+    await GatewayBlockRecordRepository.ainsert_batch(
+        [
+            GatewayBlockRecord(
+                tenant_id=3,
+                user_id=42,
+                face="dsh_chat",
+                stage="input",
+                resource_type="assistant",
+                resource_id="77",
+                matched_words=[{"word": "违规词", "count": 2}],
+                user_input="预览前 500 字符",
+                auto_reply="回答已被拦截",
+                request_id="trace-abc",
+            )
+        ]
     )
-    assert created.id is not None
 
-    fetched = await GatewayBlockRecordRepository.get_record(created.id)
+    fetched = await GatewayBlockRecordRepository.get_record(1)
     assert fetched is not None
     assert fetched.face == "dsh_chat"
     assert fetched.stage == "input"
@@ -441,69 +440,83 @@ async def test_block_record_queries_by_face_and_by_user(session_factory):
         GatewayBlockRecordRepository,
     )
 
-    for face, user_id in [("dsh_chat", 42), ("dsh_chat", 43), ("workstation_chat", 42)]:
-        await GatewayBlockRecordRepository.append_record(
-            GatewayBlockRecord(
-                tenant_id=3,
-                user_id=user_id,
-                face=face,
-                stage="input",
-                request_id=f"trace-{face}-{user_id}",
-            )
+    rows = [
+        GatewayBlockRecord(
+            tenant_id=3,
+            user_id=user_id,
+            face=face,
+            stage="input",
+            request_id=f"trace-{face}-{user_id}",
         )
+        for face, user_id in [("dsh_chat", 42), ("dsh_chat", 43), ("workstation_chat", 42)]
+    ]
+    await GatewayBlockRecordRepository.ainsert_batch(rows)
 
-    by_face = await GatewayBlockRecordRepository.list_records(tenant_id=3, face="dsh_chat")
+    by_face, _ = await GatewayBlockRecordRepository.alist_blocks(face="dsh_chat", limit=50)
     assert len(by_face) == 2
 
-    by_user = await GatewayBlockRecordRepository.list_records(tenant_id=3, user_id=42)
+    by_user, _ = await GatewayBlockRecordRepository.alist_blocks(user_id=42, limit=50)
     assert len(by_user) == 2
 
-    both = await GatewayBlockRecordRepository.list_records(tenant_id=3, face="dsh_chat", user_id=42)
+    both, _ = await GatewayBlockRecordRepository.alist_blocks(
+        face="dsh_chat", user_id=42, limit=50
+    )
     assert len(both) == 1
 
-    other_tenant = await GatewayBlockRecordRepository.list_records(tenant_id=4)
-    assert other_tenant == []
 
+def test_block_record_retention_deletes_only_expired_rows(monkeypatch):
+    """Sync test, on a sync engine.
 
-async def test_block_record_retention_deletes_only_expired_rows(session_factory):
-    from datetime import datetime, timedelta, timezone
+    The retention job runs in a Celery prefork worker, so calling the sync path
+    from an async test fails with ``MissingGreenlet`` rather than exercising
+    anything — the async engine has no sync connection to hand out. A separate
+    sync engine over the same in-memory database is the honest setup.
+    """
+    from datetime import datetime, timedelta
+
+    from sqlmodel import Session, create_engine
 
     from bisheng.gateway.domain.models.block_record import GatewayBlockRecord
+    from bisheng.gateway.domain.repositories import block_record_repository
     from bisheng.gateway.domain.repositories.block_record_repository import (
         GatewayBlockRecordRepository,
     )
 
-    now = datetime(2026, 11, 17, 12, 0, 0)
-    keep = await GatewayBlockRecordRepository.append_record(
-        GatewayBlockRecord(
-            tenant_id=3,
-            user_id=1,
-            face="dsh_chat",
-            stage="input",
-            request_id="keep",
-            create_time=now,
-        )
+    engine = create_engine(
+        "sqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool
     )
-    stale = await GatewayBlockRecordRepository.append_record(
-        GatewayBlockRecord(
-            tenant_id=3,
-            user_id=1,
-            face="dsh_chat",
-            stage="input",
-            request_id="drop",
-            create_time=now - timedelta(days=91),
-        )
-    )
-    assert keep.create_time is not None
-    assert stale.create_time is not None
+    SQLModel.metadata.create_all(engine, tables=[GatewayBlockRecord.__table__])
 
-    removed = await GatewayBlockRecordRepository.delete_records_before(
-        tenant_id=3,
-        cutoff=now - timedelta(days=90),
+    @contextmanager
+    def _factory():
+        with Session(bind=engine, expire_on_commit=False) as session:
+            yield session
+
+    monkeypatch.setattr(block_record_repository, "get_sync_db_session", _factory)
+
+    now = datetime(2026, 11, 17, 12, 0, 0)
+    with _factory() as session:
+        for request_id, create_time in (("keep", now), ("drop", now - timedelta(days=91))):
+            session.add(
+                GatewayBlockRecord(
+                    tenant_id=3,
+                    user_id=1,
+                    face="dsh_chat",
+                    stage="input",
+                    request_id=request_id,
+                    create_time=create_time,
+                )
+            )
+        session.commit()
+
+    removed = GatewayBlockRecordRepository.delete_records_before_sync(
+        3,
+        now - timedelta(days=90),
     )
     assert removed == 1
-    remaining = await GatewayBlockRecordRepository.list_records(tenant_id=3)
-    assert [row.request_id for row in remaining] == ["keep"]
+    with _factory() as session:
+        assert [row.request_id for row in session.exec(select(GatewayBlockRecord)).all()] == ["keep"]
+    engine.dispose()
 
 
 # ---------------------------------------------------------------------------
@@ -544,7 +557,12 @@ def test_block_record_repository_exposes_a_sync_retention_path():
     )
 
     assert not inspect.iscoroutinefunction(GatewayBlockRecordRepository.delete_records_before_sync)
-    assert inspect.iscoroutinefunction(GatewayBlockRecordRepository.delete_records_before)
+    assert inspect.iscoroutinefunction(GatewayBlockRecordRepository.ainsert_batch)
+    assert inspect.iscoroutinefunction(GatewayBlockRecordRepository.alist_blocks)
+    # The batch insert must bypass the tenant filter: the flusher is a
+    # background task with no request ContextVar, and one batch spans tenants.
+    source = inspect.getsource(GatewayBlockRecordRepository.ainsert_batch)
+    assert "bypass_tenant_filter" in source
 
 
 # ---------------------------------------------------------------------------

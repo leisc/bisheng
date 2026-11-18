@@ -26,7 +26,6 @@ One code, one meaning (C5). Two traps this family is prone to:
 
 from .base import BaseErrorCode
 
-
 # ---------------------------------------------------------------------------
 # 26600-26609 traffic control
 # ---------------------------------------------------------------------------
@@ -42,8 +41,27 @@ class GatewayOnlineLimitError(BaseErrorCode):
     Msg: str = '当前在线会话数已达上限，请稍后重试'
 
 
+class GatewayBlockRecordInvalidCursorError(BaseErrorCode):
+    """Block-record query got a cursor that is malformed, version-incompatible,
+    or issued under a different sort context.
+
+    Same contract as ``AppInvalidCursorError`` / ``KnowledgeInvalidCursorError``
+    (F027): a bad cursor is the client's mistake, not a server fault, so it gets
+    a stable code the frontend can translate instead of a 500.
+    """
+
+    Code: int = 26609
+    Msg: str = '分页参数已失效，请刷新后重试'
+
+
 # ---------------------------------------------------------------------------
 # 26610-26629 OAuth / SSO / LDAP provider side
+#
+# NOTE: 26603-26606 live here in *meaning* but were allocated inside the
+# 26600-26609 numeric band, because that band was reserved for traffic control
+# before the OAuth work was scoped. The README table (§20) is the authority and
+# already lists them by meaning; do not "fix" the numbers by moving them, that
+# would change the wire contract for every already-deployed frontend.
 # ---------------------------------------------------------------------------
 
 
